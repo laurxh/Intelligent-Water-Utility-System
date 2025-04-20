@@ -2,8 +2,13 @@
 from flask import Blueprint, jsonify, request
 import wntr
 import os
+import random
+import csv
+import matplotlib.pyplot as plt
+import tempfile
 # 如果已经有蓝图定义，使用现有的，否则创建新的
 # 假设您现有的文件可能已经有一些代码和变量
+water_plant_ids = ['1','8']
 try:
     scheduler_routes
 except NameError:
@@ -33,7 +38,7 @@ def run_scheduler():
     """运行调度算法"""
     try:
         # 获取项目根目录路径
-        '''BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
         # 构建 Water-Scheduling 目录的绝对路径
         water_scheduling_dir = os.path.join(BASE_DIR, 'Water-Scheduling')
@@ -66,7 +71,7 @@ def run_scheduler():
             return jsonify({
                 "success": False,
                 "error": f"计算脚本执行失败: {result.stderr}"
-            }), 500'''
+            }), 500
         simulated_network_data = export_network_data(after_simulation=True)
         return jsonify({
             "success": True,
@@ -84,12 +89,13 @@ def run_scheduler():
             "traceback": error_trace
         }), 500
 
-def export_network_data(after_simulation=False):
+def export_network_data(after_simulation=False, hour=0):
     """
     导出管网数据，用于前端绘制管网拓扑图
     
     参数:
         after_simulation (bool): 是否导出模拟后的管网数据，默认为False表示导出模拟前的原始数据
+        hour (int): 要获取的模拟时间（小时），默认为0表示模拟开始时刻
     
     返回:
         dict: 包含nodes和links的字典
@@ -106,6 +112,8 @@ def export_network_data(after_simulation=False):
     
     # 如果需要模拟后的数据，则运行模拟
     results = None
+    time_step_index = 0  # 默认使用第一个时间步
+    
     if after_simulation:
         try:
             print("开始运行EPANET模拟...")
@@ -113,6 +121,21 @@ def export_network_data(after_simulation=False):
             sim = wntr.sim.EpanetSimulator(wn)
             results = sim.run_sim()
             print("EPANET模拟完成")
+            
+            # 获取所有时间步
+            time_steps = results.node['pressure'].index
+            print(f"模拟生成了 {len(time_steps)} 个时间步")
+            
+            # 查找对应于指定小时的时间步
+            target_time = hour * 3600  # 转换为秒
+            
+            # 查找最接近目标时间的时间步
+            time_differences = [abs(t - target_time) for t in time_steps]
+            time_step_index = time_differences.index(min(time_differences))
+            
+            current_time = time_steps[time_step_index]
+            print(f"找到最接近 {hour} 小时的时间步: 索引={time_step_index}, 实际时间={current_time}秒")
+            
         except Exception as e:
             print(f"运行模拟时出错: {str(e)}")
             # 如果模拟失败，返回原始数据
@@ -123,31 +146,33 @@ def export_network_data(after_simulation=False):
     
     # 处理所有节点（junctions, reservoirs, tanks）
     for node_id, node in wn.nodes():
+        is_water_plant = node_id in water_plant_ids
         node_data = {
             'id': node_id,
             'node_type': node.node_type,
             'coordinates': list(node.coordinates) if node.coordinates else [0, 0],
+            'is_water_plant': is_water_plant,  # 添加水厂标记
         }
         
         # 针对不同类型节点添加特定属性
         if node.node_type == 'Junction':
             # 对于模拟前的数据，添加基本需水量
             if not after_simulation:
-                node_data['base_demand'] = node.base_demand
-                node_data['demand_unit'] = 'm^3/s'  # 单位为升/秒
+                node_data['base_demand'] = round(float(node.base_demand),10)
+                node_data['demand_unit'] = 'm^3/s'  # 单位为立方米/秒
             
             node_data['elevation'] = node.elevation
             
             # 如果是模拟后的数据，添加压力和实际水量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的压力数据
-                    pressure = results.node['pressure'].loc[results.node['pressure'].index[-1], node_id]
+                    # 获取指定时间步的压力数据
+                    pressure = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
                     node_data['pressure'] = round(float(pressure), 10)  # 保留两位小数
                     node_data['pressure_unit'] = 'm'  # 单位为米
                     
-                    # 获取最后一个时间步的实际需水量数据
-                    actual_demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    # 获取指定时间步的实际需水量数据
+                    actual_demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['actual_demand'] = round(float(actual_demand), 10)  # 保留三位小数
                 except Exception as e:
                     print(f"获取节点 {node_id} 压力/需水量数据时出错: {str(e)}")
@@ -161,10 +186,10 @@ def export_network_data(after_simulation=False):
             if after_simulation and results is not None:
                 try:
                     # 水库的压力头
-                    head = results.node['head'].loc[results.node['head'].index[-1], node_id]
+                    head = results.node['head'].loc[results.node['head'].index[time_step_index], node_id]
                     node_data['current_head'] = round(float(head), 2)
                     # 水库的出水量
-                    demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['outflow'] = round(float(demand), 10)  # 水库出水为负需水量
                 except Exception as e:
                     print(f"获取水库 {node_id} 数据时出错: {str(e)}")
@@ -178,9 +203,12 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前水位信息和流量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的水位数据
+                    # 获取指定时间步的水位数据
+                    current_level = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
+                    node_data['current_level'] = round(float(current_level), 2)
+                    
                     # 获取水箱的流入/流出量
-                    demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['inflow'] = round(float(demand), 10)  # 水箱流入为负需水量
                 except Exception as e:
                     print(f"获取水箱 {node_id} 水位/流量数据时出错: {str(e)}")
@@ -208,8 +236,8 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加流量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的流量数据
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的流量数据
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
                 except Exception as e:
                     print(f"获取管道 {link_id} 流量数据时出错: {str(e)}")
@@ -222,12 +250,12 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前开关状态和流量
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的状态和流量数据
-                    status = results.link['status'].loc[results.link['status'].index[-1], link_id]
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的状态和流量数据
+                    status = results.link['status'].loc[results.link['status'].index[time_step_index], link_id]
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['current_status'] = "Open" if float(status) > 0 else "Closed"
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
-                    link_data['flow_unit'] = 'm^3/s'  # 单位为升/秒
+                    link_data['flow_unit'] = 'm^3/s'  # 单位为立方米/秒
                 except Exception as e:
                     print(f"获取泵 {link_id} 状态/流量数据时出错: {str(e)}")
                     link_data['current_status'] = None
@@ -241,12 +269,12 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前开关状态和流量
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的状态和流量数据
-                    status = results.link['status'].loc[results.link['status'].index[-1], link_id]
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的状态和流量数据
+                    status = results.link['status'].loc[results.link['status'].index[time_step_index], link_id]
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['current_status'] = "Open" if float(status) > 0 else "Closed"
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
-                    link_data['flow_unit'] = 'm^3/s'  # 单位为升/秒
+                    link_data['flow_unit'] = 'm^3/s'  # 单位为立方米/秒
                 except Exception as e:
                     print(f"获取阀门 {link_id} 状态/流量数据时出错: {str(e)}")
                     link_data['current_status'] = None
@@ -279,10 +307,308 @@ def export_network_data(after_simulation=False):
         node['coordinates'][1] = (node['coordinates'][1] - min_y) / y_range
     
     # 打印一些调试信息
-    '''print(f"导出节点数量: {len(nodes)}, 连接数量: {len(links)}")
-    if nodes:
-        print(f"节点ID示例: {[node['id'] for node in nodes[:5]]}")
-    if links:
-        print(f"连接示例: {[(link['id'], link['source'], link['target']) for link in links[:5]]}")'''
-    print(node,link)  
+    print(f"导出节点数量: {len(nodes)}, 连接数量: {len(links)}")
+    
     return {'nodes': nodes, 'links': links}
+from io import StringIO
+@scheduler_routes.route('/network/generate-random', methods=['POST'])
+def generate_random_demands():
+    """为所有节点生成随机需水量"""
+    try:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        inp_file_path = os.path.join(BASE_DIR, 'Water-Scheduling', 'networks', 'Net2.inp')
+        
+        # 加载水力网络模型
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 为每个节点生成随机需水量
+        for node_id, node in wn.nodes():
+            if node.node_type == 'Junction':
+                # 生成0.001到0.01之间的随机需水量(单位:立方米/秒)
+                random_demand = round(random.uniform(0, 0.01), 10)
+                print(random_demand)
+                node.demand_timeseries_list[0].base_value = random_demand
+        
+        # 保存修改后的模型
+        wntr.network.io.write_inpfile(wn,inp_file_path)
+        # 返回更新后的网络数据
+        network_data = export_network_data()
+        
+        return jsonify({
+            "success": True,
+            "message": "已成功生成随机需水量数据",
+            "data": network_data
+        })
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"生成随机需水量时出错: {str(e)}")
+        print(error_trace)
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": error_trace
+        }), 500
+
+# 2. 导入CSV文件更新需水量
+@scheduler_routes.route('/network/import-demands', methods=['POST'])
+def import_demands():
+    """从CSV文件导入需水量数据"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "未上传文件"
+            }), 400
+            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({
+                "success": False,
+                "error": "未选择文件"
+            }), 400
+            
+        if not file.filename.endswith('.csv'):
+            return jsonify({
+                "success": False,
+                "error": "请上传CSV文件"
+            }), 400
+        
+        # 读取CSV文件内容
+        file_content = file.read().decode('utf-8')
+        csv_data = list(csv.reader(StringIO(file_content)))
+        
+        # 验证CSV格式
+        if len(csv_data) == 0:
+            return jsonify({
+                "success": False,
+                "error": "CSV文件为空"
+            }), 400
+            
+        # 加载水力网络模型
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        inp_file_path = os.path.join(BASE_DIR, 'Water-Scheduling', 'networks', 'Net2.inp')
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 更新节点需水量
+        updated_nodes = []
+        errors = []
+        
+        for row_index, row in enumerate(csv_data, 1):
+            # 检查行格式
+            if len(row) < 2:
+                errors.append(f"第{row_index}行格式错误: 列数不足")
+                continue
+                
+            node_id = row[0].strip()
+            
+            # 检查需水量是否为数字
+            try:
+                demand = float(row[1].strip())
+            except ValueError:
+                errors.append(f"第{row_index}行格式错误: '{row[1]}' 不是有效数字")
+                continue
+            
+            # 检查节点是否存在且为Junction类型
+            if node_id not in wn.node_name_list:
+                errors.append(f"节点 '{node_id}' 不存在")
+                continue
+                
+            if wn.nodes[node_id].node_type != 'Junction':
+                errors.append(f"节点 '{node_id}' 不是Junction类型，无法设置需水量")
+                continue
+            
+            # 更新节点需水量
+            wn.nodes[node_id].demand_timeseries_list[0].base_value = demand
+            updated_nodes.append(node_id)
+        
+        # 检查是否有任何节点被更新
+        if not updated_nodes:
+            return jsonify({
+                "success": False,
+                "error": "没有任何节点被更新" + (f"，错误: {'; '.join(errors)}" if errors else "")
+            }), 400
+        
+        # 保存修改后的模型
+        wntr.network.io.write_inpfile(wn, inp_file_path)
+        
+        # 返回更新后的网络数据
+        network_data = export_network_data()
+        
+        # 如果有错误但也有成功更新的节点，返回部分成功信息
+        if errors:
+            return jsonify({
+                "success": True,
+                "message": f"已更新{len(updated_nodes)}个节点，但有{len(errors)}个错误",
+                "errors": errors,
+                "updated_nodes": updated_nodes,
+                "data": network_data
+            })
+        
+        # 全部成功
+        return jsonify({
+            "success": True,
+            "message": f"已成功更新 {len(updated_nodes)} 个节点的需水量",
+            "updated_nodes": updated_nodes,
+            "data": network_data
+        })
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"导入需水量数据时出错: {str(e)}")
+        print(error_trace)
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": error_trace
+        }), 500
+
+# 3. 修改单个节点需水量
+@scheduler_routes.route('/network/update-demand', methods=['POST'])
+def update_node_demand():
+    """更新单个节点的需水量"""
+    try:
+        data = request.json
+        if not data or 'node_id' not in data or 'demand' not in data:
+            return jsonify({
+                "success": False,
+                "error": "请提供节点ID和需水量"
+            }), 400
+            
+        node_id = data['node_id']
+        demand = float(data['demand'])
+        
+        # 加载水力网络模型
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        inp_file_path = os.path.join(BASE_DIR, 'Water-Scheduling', 'networks', 'Net2.inp')
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 检查节点是否存在且是Junction类型
+        if node_id not in wn.node_name_list:
+            return jsonify({
+                "success": False,
+                "error": f"节点 {node_id} 不存在"
+            }), 404
+            
+        if wn.nodes[node_id].node_type != 'Junction':
+            return jsonify({
+                "success": False,
+                "error": f"节点 {node_id} 不是Junction类型，无法设置需水量"
+            }), 400
+            
+        # 更新需水量
+        wn.nodes[node_id].demand_timeseries_list[0].base_value = demand
+        
+        # 保存修改后的模型
+        wntr.network.io.write_inpfile(wn,inp_file_path)
+        
+        # 返回更新后的网络数据
+        network_data = export_network_data()
+        
+        return jsonify({
+            "success": True,
+            "message": f"已成功更新节点 {node_id} 的需水量为 {demand}",
+            "data": network_data
+        })
+    except ValueError:
+        return jsonify({
+            "success": False,
+            "error": "需水量必须是有效的数值"
+        }), 400
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"更新节点需水量时出错: {str(e)}")
+        print(error_trace)
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": error_trace
+        }), 500
+    
+@scheduler_routes.route('/network/heatmap', methods=['POST'])
+def generate_heatmap():
+    """生成网络压力或流量的热力图，并显示节点ID"""
+    try:
+        # 导入必要的库并设置 matplotlib 为非交互模式
+        import matplotlib
+        matplotlib.use('Agg')  # 设置为非交互式后端
+        
+        # 尝试使用不同的方式设置字体
+        try:
+            # 方法1：使用系统可用字体
+            import matplotlib.font_manager as fm
+            font_path = fm.findfont(fm.FontProperties(family=['sans-serif']))
+            prop = fm.FontProperties(fname=font_path)
+            matplotlib.rcParams['font.family'] = prop.get_name()
+        except:
+            # 方法2：如果上面失败，尝试使用基本设置
+            matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Bitstream Vera Sans']
+        
+        import matplotlib.pyplot as plt
+        plt.ioff()  # 关闭交互模式
+        from flask import send_file
+        from io import BytesIO
+        
+        # 获取请求中的网络数据
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        inp_file_path = os.path.join(BASE_DIR, 'Water-Scheduling', 'networks', 'Net2.inp')
+        
+        # 使用WNTR加载网络
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 运行水力模拟
+        sim = wntr.sim.EpanetSimulator(wn)
+        results = sim.run_sim()
+        
+        # 获取压力结果 - 0小时的压力（第一个时间步）
+        pressure = results.node['pressure'].iloc[0]
+        
+        # 创建图形
+        plt.figure(figsize=(8, 7))
+        
+        # 使用WNTR的内置函数绘制热力图，但不设置中文标题
+        ax = wntr.graphics.plot_network(
+            wn, 
+            node_attribute=pressure,
+            node_size=50,
+            title='Pressure Heatmap (unit: m)',  # 使用英文避免乱码
+            node_cmap='jet',
+            link_width=1.5,
+            link_alpha=0.7,
+            add_colorbar=True
+        )
+        
+        # 添加节点ID标签
+        for node_name, node in wn.nodes():
+            x, y = node.coordinates
+            ax.text(x + 0.5, y + 0.5, node_name, fontsize=7, ha='left', va='bottom', 
+                    color='blue', bbox=dict(facecolor='white', alpha=0.5, pad=0.2, edgecolor='none'))
+        
+        # 调整布局
+        plt.tight_layout()
+        
+        # 将图像保存到内存中
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=200, bbox_inches='tight')
+        img_buffer.seek(0)
+        plt.close('all')
+        
+        # 直接返回图像数据
+        return send_file(
+            img_buffer,
+            mimetype='image/png',
+            as_attachment=False,
+            download_name='network_heatmap.png'
+        )
+    
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print("Error in generate_heatmap:", error_trace)
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": error_trace
+        }), 500
