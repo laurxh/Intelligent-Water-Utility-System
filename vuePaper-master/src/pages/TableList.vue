@@ -304,7 +304,27 @@
                 </div>
             </div>
         </div>
-
+        <div id="heatmapModal" class="heatmap-modal" v-if="showHeatmapModal">
+            <div class="heatmap-modal-content">
+                <div class="heatmap-modal-header">
+                    <span class="heatmap-close-btn" @click="closeHeatmapModal">&times;</span>
+                    <h2 class="heatmap-modal-title">压力热力图</h2>
+                </div>
+                <div class="heatmap-modal-body">
+                    <img id="heatmapImage" :src="heatmapImageUrl" alt="网络热力图">
+                    <div v-if="loadingHeatmap" class="heatmap-loading">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="sr-only">加载中...</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="heatmap-modal-footer">
+                    <button id="downloadHeatmapBtn" class="btn btn-success" @click="downloadHeatmap">
+                        <i class="ti-download"></i> 下载热力图
+                    </button>
+                </div>
+            </div>
+        </div>
         <!-- 底部分隔线 -->
         <hr class="mt-5 mb-4">
 
@@ -398,6 +418,9 @@ export default {
             selectedFile: null,
             hasRunSchedule: false,// 初始为false，运行调度后设置为true
             scheduledData: null, // 用于保存调度结果数据
+            showHeatmapModal: false,
+            heatmapImageUrl: '',
+            loadingHeatmap: false,
         };
     },
 
@@ -1373,125 +1396,55 @@ export default {
         },
         // 热力图生成函数
         generateHeatmap(event) {
-            // 阻止默认行为
-            if (event) event.preventDefault();
+            event.preventDefault();
+            this.loadingHeatmap = true;
+            this.showHeatmapModal = true;
 
-            // 显示加载提示
-            const loadingElement = document.createElement('div');
-            loadingElement.className = 'loading-overlay';
-            loadingElement.innerHTML = '<div class="loading-spinner"></div><div>正在生成热力图...</div>';
-            document.body.appendChild(loadingElement);
-
-            // 发送请求 - 期望返回的是图像而不是JSON
             fetch('http://localhost:5000/api/scheduler/network/heatmap', {
                 method: 'POST',
                 headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
+                    'Content-Type': 'application/json',
                 },
-                credentials: 'same-origin'
+                body: JSON.stringify({})
             })
                 .then(response => {
-                    // 移除加载提示
-                    document.body.removeChild(loadingElement);
-
                     if (!response.ok) {
-                        // 如果响应不成功，尝试解析错误信息
-                        return response.json().then(errorData => {
-                            throw new Error(errorData.error || `HTTP错误 ${response.status}`);
-                        });
+                        throw new Error('网络响应异常');
                     }
-
-                    // 检查内容类型
-                    const contentType = response.headers.get('content-type');
-                    if (contentType && contentType.includes('application/json')) {
-                        // 如果返回的是JSON（可能是错误信息），则解析JSON
-                        return response.json().then(data => {
-                            if (!data.success) {
-                                throw new Error(data.error || '未知错误');
-                            }
-                            // 这种情况不应该发生，因为我们期望图像数据
-                            throw new Error('服务器返回了JSON而不是图像');
-                        });
-                    }
-
-                    // 正常情况下，返回的是图像数据
                     return response.blob();
                 })
                 .then(blob => {
-                    // 创建一个临时URL来表示Blob数据
-                    const imageUrl = URL.createObjectURL(blob);
-                    this.showHeatmapImage(imageUrl);
+                    this.loadingHeatmap = false;
+                    this.heatmapImageUrl = URL.createObjectURL(blob);
                 })
                 .catch(error => {
-                    // 移除加载提示（如果尚未移除）
-                    if (document.body.contains(loadingElement)) {
-                        document.body.removeChild(loadingElement);
-                    }
-                    console.error('热力图生成错误:', error);
-                    alert('请求失败: ' + error.message);
+                    this.loadingHeatmap = false;
+                    this.showNotification('error', '获取热力图失败: ' + error.message);
+                    this.closeHeatmapModal();
                 });
         },
 
-        // 显示热力图图像的函数
-        showHeatmapImage(imageUrl) {
-            console.log('显示热力图');
+        // 关闭热力图模态框
+        closeHeatmapModal() {
+            this.showHeatmapModal = false;
+            // 清理 Blob URL
+            if (this.heatmapImageUrl) {
+                URL.revokeObjectURL(this.heatmapImageUrl);
+                this.heatmapImageUrl = '';
+            }
+        },
 
-            // 创建一个模态框来显示图片
-            const modal = document.createElement('div');
-            modal.className = 'modal-overlay';
-            modal.style.position = 'fixed';
-            modal.style.top = '0';
-            modal.style.left = '0';
-            modal.style.width = '100%';
-            modal.style.height = '100%';
-            modal.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-            modal.style.display = 'flex';
-            modal.style.justifyContent = 'center';
-            modal.style.alignItems = 'center';
-            modal.style.zIndex = '1000';
+        // 下载热力图
+        downloadHeatmap() {
+            if (!this.heatmapImageUrl) return;
 
-            modal.innerHTML = `
-    <div class="modal-content" style="background-color: white; padding: 20px; border-radius: 5px; max-width: 90%; max-height: 90%; position: relative; overflow: auto;">
-        <span class="close-button" style="position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #555;">&times;</span>
-        <h3 style="margin-top: 0; text-align: center;">压力热力图</h3>
-        <div class="image-container" style="text-align: center;">
-            <img src="${imageUrl}" alt="热力图" style="max-width: 100%; max-height: 80vh;" />
-        </div>
-        <div style="text-align: center; margin-top: 15px;">
-            <button id="download-heatmap" style="padding: 8px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">下载热力图</button>
-        </div>
-    </div>
-    `;
-            document.body.appendChild(modal);
-
-            // 添加关闭按钮事件
-            const closeButton = modal.querySelector('.close-button');
-            closeButton.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                // 释放Blob URL以避免内存泄漏
-                URL.revokeObjectURL(imageUrl);
-            });
-
-            // 点击模态框背景也可以关闭
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    document.body.removeChild(modal);
-                    // 释放Blob URL以避免内存泄漏
-                    URL.revokeObjectURL(imageUrl);
-                }
-            });
-
-            // 添加下载按钮事件
-            const downloadButton = modal.querySelector('#download-heatmap');
-            downloadButton.addEventListener('click', () => {
-                const link = document.createElement('a');
-                link.href = imageUrl;
-                link.download = 'network_heatmap.png';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            });
-        }
+            const a = document.createElement('a');
+            a.href = this.heatmapImageUrl;
+            a.download = '网络压力热力图.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        },
 
     }
 }
@@ -1985,5 +1938,92 @@ export default {
 .image-container img {
     max-width: 100%;
     max-height: 70vh;
+}
+.heatmap-modal {
+    display: block;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    overflow: auto;
+}
+
+.heatmap-modal-content {
+    position: relative;
+    background-color: #fefefe;
+    margin: 2% auto;
+    padding: 0;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 900px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    display: flex;
+    flex-direction: column;
+    max-height: 95vh;
+}
+
+.heatmap-modal-header {
+    padding: 10px 16px;
+    background-color: #f8f8f8;
+    border-bottom: 1px solid #ddd;
+    border-radius: 8px 8px 0 0;
+    position: relative;
+}
+
+.heatmap-modal-title {
+    margin: 0;
+    text-align: center;
+    font-size: 20px;
+    color: #333;
+}
+
+.heatmap-close-btn {
+    position: absolute;
+    right: 16px;
+    top: 10px;
+    color: #888;
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.heatmap-close-btn:hover {
+    color: #000;
+}
+
+.heatmap-modal-body {
+    padding: 16px;
+    overflow: auto;
+    text-align: center;
+    flex-grow: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+}
+
+#heatmapImage {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+}
+
+.heatmap-modal-footer {
+    padding: 10px 16px;
+    background-color: #f8f8f8;
+    border-top: 1px solid #ddd;
+    border-radius: 0 0 8px 8px;
+    text-align: center;
+}
+
+.heatmap-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
 }
 </style>
