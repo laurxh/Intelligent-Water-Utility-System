@@ -1,3 +1,4 @@
+<!-- 水量预测-->
 <template>
   <div class="content">
     <!-- 保留原有的上传部分 -->
@@ -103,13 +104,14 @@
 
     <!-- 预测水量按钮 - 放在最底部 -->
     <div class="forecast-button-container"
-      style="position: fixed; bottom: 40px; left: 0; right: 0; width: 100%; display: flex; justify-content: center; align-items: center;">
+      style="position: absolute; bottom: 20px; left: 0; right: 0; width: 100%; display: flex; justify-content: center; align-items: center;">
       <button class="btn btn-primary forecast-button" style="font-size: 0.9rem; padding: 0.4rem 0.8rem;"
         @click="forecastWater" :disabled="isForecasting || !uploadedFile">
         <i class="ti-bar-chart mr-1"></i>
         {{ isForecasting ? '预测中...' : '预测水量' }}
       </button>
     </div>
+
   </div>
 </template>
 
