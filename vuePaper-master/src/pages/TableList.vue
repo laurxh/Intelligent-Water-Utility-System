@@ -1,3 +1,4 @@
+<!-- 调度算法-->
 <template>
     <div class="content">
         <!-- 标题 -->
@@ -224,7 +225,7 @@
             <button class="btn btn-primary action-button" @click="runSimulation"
                 :disabled="!networkData || isSimulating">
                 <i class="ti-control-play mr-1"></i>
-                {{ isSimulating ? '模拟中...' : '运行模拟' }}
+                {{ isSimulating ? '计算中...' : '运行调度' }}
             </button>
         </div>
     </div>
