@@ -21,7 +21,7 @@ def main():
     
     # 修改节点的基本需水量
     for i in water_plant_ids:
-        random_number = random.uniform(0, 0.02)
+        random_number = random.uniform(0, 0.1)
         print(i, random_number)
         
         # 在WNTR中修改节点需水量
