@@ -8,7 +8,17 @@
                 <button class="btn btn-primary btn-sm" @click="refreshNetworkData">
                     <i class="ti-reload"></i> 刷新数据
                 </button>
+                <button class="btn btn-info btn-sm" @click="generateRandomDemands">
+                    <i class="ti-bar-chart"></i> 生成随机需水量
+                </button>
+                <button class="btn btn-success btn-sm" @click="openImportModal">
+                    <i class="ti-import"></i> 导入需水量
+                </button>
+                <button class="btn btn-warning btn-sm" @click="openUpdateDemandModal">
+                    <i class="ti-pencil"></i> 修改需水量
+                </button>
             </div>
+
         </div>
 
         <!-- 通知提示 -->
@@ -57,6 +67,10 @@
                     <div class="legend-color valve"></div>
                     <span>阀门</span>
                 </div>
+                <div class="legend-item">
+                    <div class="legend-color water-plant"></div>
+                    <span>水厂</span>
+                </div>
             </div>
 
             <div id="network-svg-container" ref="networkContainer" class="svg-container">
@@ -79,10 +93,14 @@
                             @click.stop="openElementPopup(link)" />
 
                         <!-- 节点 -->
+                        <!-- 修改节点渲染部分 -->
                         <circle v-for="(node, index) in networkData.nodes" :key="`node-${index}`" :cx="node.x"
-                            :cy="node.y" :r="getNodeRadius(node.node_type)" :fill="getNodeColor(node.node_type)"
-                            stroke="#fff" stroke-width="1.5" :class="`node ${node.node_type.toLowerCase()}`"
+                            :cy="node.y" :r="node.is_water_plant ? 7 : getNodeRadius(node.node_type)"
+                            :fill="node.is_water_plant ? '#d35400' : getNodeColor(node.node_type)" stroke="#fff"
+                            stroke-width="1.5"
+                            :class="`node ${node.is_water_plant ? 'water-plant' : node.node_type.toLowerCase()}`"
                             @click.stop="openElementPopup(node)" />
+
 
                         <!-- 节点标签 -->
                         <text v-for="(node, index) in networkData.nodes" :key="`label-${index}`" :x="node.x + 12"
@@ -90,10 +108,80 @@
                             {{ node.id }}
                         </text>
                     </g>
+                    <!-- 水厂需水量标签（带框） -->
+                    <!-- 水厂需水量标签（带框） -->
+                    <!-- 左上角水厂需水量面板（仅在调度运行后显示） -->
+                    <g v-if="isScheduleRunCompleted" class="demand-info-panel">
+                        <!-- 面板背景 -->
+                        <rect x="10" y="10" :width="180" height="30" rx="5" ry="5" fill="rgba(255, 255, 255, 0.95)"
+                            stroke="#d35400" stroke-width="1" />
+
+                        <!-- 标题 -->
+                        <text x="20" y="30" font-size="14px" font-weight="bold" fill="#333">
+                            水厂需水量
+                        </text>
+
+                        <!-- 需水量列表（单独的面板） -->
+                        <g v-for="(node, index) in waterPlantNodes" :key="`demand-panel-${index}`">
+                            <rect x="10" :y="50 + (index * 30)" width="180" height="25" rx="3" ry="3" fill="white"
+                                stroke="#d3d3d3" stroke-width="1" />
+
+                            <text :x="20" :y="68 + (index * 30)" font-size="12px" fill="#333">
+                                {{ node.id }}：{{ formatDemand(node) }}
+                            </text>
+                        </g>
+                    </g>
+
                 </svg>
+                <div class="network-water-plants" v-if="networkData && waterPlantNodes.length > 0 && hasRunSchedule">
+                    <div class="panel-header">水厂需水量</div>
+                    <div class="water-plant-list">
+                        <div class="water-plant-item" v-for="(node, index) in waterPlantNodes" :key="`wp-${index}`">
+                            <span class="water-plant-id">{{ node.id }}:</span>
+                            <span class="water-plant-demand">{{ formatDemand(node) }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="export-buttons" v-if="hasRunSchedule">
+                    <button class="btn btn-info btn-sm" @click="exportWaterPlantData">
+                        <i class="ti-download"></i> 导出需水量
+                    </button>
+                    <button class="btn btn-danger btn-sm" @click="generateHeatmap($event)">
+                        <i class="ti-map"></i> 生成热力图
+                    </button>
+                </div>
             </div>
         </div>
-
+        <div v-if="showImportModal" class="element-popup-overlay" @click="closeImportModal">
+            <div class="element-popup" @click.stop>
+                <div class="element-popup-header">
+                    <h5>导入需水量数据</h5>
+                    <button class="close-btn" @click="closeImportModal">×</button>
+                </div>
+                <div class="element-popup-body">
+                    <p>请选择CSV文件，格式为：第一列为节点ID，第二列为需水量。</p>
+                    <div class="form-group">
+                        <label for="csv-file" class="form-label">CSV文件</label>
+                        <input type="file" id="csv-file" style="display:none" accept=".csv" ref="fileInput"
+                            @change="handleFileChange">
+                        <div class="file-input-container">
+                            <div class="file-input-box" @click="triggerFileInput">
+                                {{ selectedFileName || '未选择文件' }}
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="importError" class="alert alert-danger mt-3">
+                        {{ importError }}
+                    </div>
+                </div>
+                <div class="element-popup-footer">
+                    <button class="btn btn-secondary mr-2" @click="closeImportModal">取消</button>
+                    <button class="btn btn-primary" @click="importDemands" :disabled="isImporting">
+                        {{ isImporting ? '导入中...' : '导入' }}
+                    </button>
+                </div>
+            </div>
+        </div>
         <!-- 元素详情弹窗 -->
         <div v-if="showElementPopup" class="element-popup-overlay" @click="closeElementPopup">
             <div class="element-popup" @click.stop>
@@ -202,7 +290,7 @@
                             v-if="(selectedElement.link_type === 'Pump' || selectedElement.link_type === 'Valve') && selectedElement.current_status !== undefined">
                             <span class="detail-label">当前状态:</span>
                             <span class="detail-value">{{ selectedElement.current_status === 'Open' ? '开启' : '关闭'
-                            }}</span>
+                                }}</span>
                         </div>
                         <div class="detail-item" v-if="selectedElement.flow !== undefined">
                             <span class="detail-label">流量:</span>
@@ -227,6 +315,36 @@
                 <i class="ti-control-play mr-1"></i>
                 {{ isSimulating ? '计算中...' : '运行调度' }}
             </button>
+        </div>
+        <div v-if="showUpdateDemandModal" class="element-popup-overlay" @click="closeUpdateDemandModal">
+            <div class="element-popup" @click.stop>
+                <div class="element-popup-header">
+                    <h5>修改节点需水量</h5>
+                    <button class="close-btn" @click="closeUpdateDemandModal">×</button>
+                </div>
+                <div class="element-popup-body">
+                    <div class="form-group">
+                        <label for="node-id" class="form-label">节点ID</label>
+                        <input type="text" id="node-id" class="form-control" v-model="updateDemandForm.nodeId"
+                            placeholder="请输入节点ID">
+                    </div>
+                    <div class="form-group mt-3">
+                        <label for="demand-value" class="form-label">需水量</label>
+                        <input type="number" id="demand-value" class="form-control" v-model="updateDemandForm.demand"
+                            step="0.001" min="0" placeholder="请输入需水量值">
+                        <small class="form-text text-muted">单位：立方米/秒</small>
+                    </div>
+                    <div v-if="updateDemandError" class="alert alert-danger mt-3">
+                        {{ updateDemandError }}
+                    </div>
+                </div>
+                <div class="element-popup-footer">
+                    <button class="btn btn-secondary mr-2" @click="closeUpdateDemandModal">取消</button>
+                    <button class="btn btn-primary" @click="updateDemand" :disabled="isUpdatingDemand">
+                        {{ isUpdatingDemand ? '更新中...' : '更新' }}
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 </template>
@@ -262,7 +380,24 @@ export default {
             translateY: 0,
             isDragging: false,
             dragStartX: 0,
-            dragStartY: 0
+            dragStartY: 0,
+
+            showImportModal: false,
+            isImporting: false,
+            importError: null,
+
+            // 修改需水量相关
+            showUpdateDemandModal: false,
+            isUpdatingDemand: false,
+            updateDemandError: null,
+            updateDemandForm: {
+                nodeId: '',
+                demand: null
+            },
+            selectedFileName: '',
+            selectedFile: null,
+            hasRunSchedule: false,// 初始为false，运行调度后设置为true
+            scheduledData: null, // 用于保存调度结果数据
         };
     },
 
@@ -301,8 +436,128 @@ export default {
         document.removeEventListener('touchmove', this.handleTouchMove);
         document.removeEventListener('touchend', this.handleTouchEnd);
     },
-
+    computed: {
+        waterPlantNodes() {
+            return this.networkData.nodes.filter(node =>
+                node.is_water_plant &&
+                (node.actual_demand !== undefined || node.base_demand !== undefined)
+            ).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+        }
+    },
     methods: {
+        
+        exportWaterPlantData() {
+            if (!this.scheduledData || !this.scheduledData.nodes || this.scheduledData.nodes.length === 0) {
+                this.displayNotification('error', '没有可导出的水厂数据', 5000);
+                return;
+            }
+
+            try {
+                // 显示加载中通知
+                this.displayNotification('info', '正在导出水厂需水量数据...', 5000);
+
+                // 根据is_water_plant属性筛选水厂节点
+                const waterPlantData = this.scheduledData.nodes
+                    .filter(node => node.is_water_plant === true)
+                    .map(node => ({
+                        id: node.id,
+                        demand: node.actual_demand !== undefined ? node.actual_demand : node.base_demand
+                    }));
+
+                // 检查是否有水厂数据
+                if (waterPlantData.length === 0) {
+                    this.displayNotification('error', '未找到任何水厂节点', 5000);
+                    return;
+                }
+
+                // 创建CSV内容
+                let csvContent = "水厂ID,需水量(m³/s)\n";
+                waterPlantData.forEach(plant => {
+                    csvContent += `${plant.id},${plant.demand}\n`;
+                });
+
+                // 创建Blob对象，添加BOM标记以支持中文
+                const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+
+                // 创建下载链接
+                const link = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+
+                // 设置下载属性
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '_').replace(/T/g, '_').substring(0, 19);
+                link.setAttribute('href', url);
+                link.setAttribute('download', `water_plant_demands_${timestamp}.csv`);
+                link.style.visibility = 'hidden';
+
+                // 添加到文档并触发点击
+                document.body.appendChild(link);
+                link.click();
+
+                // 清理
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                this.displayNotification('success', '水厂需水量数据导出成功', 5000);
+                console.log('已导出水厂数据:', waterPlantData);
+            } catch (error) {
+                console.error('导出水厂数据出错:', error);
+                this.displayNotification('error', '导出出错: ' + error.message, 8000);
+            }
+        },
+    
+        formatDemand(node) {
+            const demand = node.actual_demand !== undefined ? node.actual_demand : node.base_demand;
+            // 格式化数值，保留四位小数
+            const formattedDemand = Number(demand).toFixed(10);
+            const unit = 'm³/s';
+            return `${formattedDemand} ${unit}`;
+        },
+        getNodeColor(nodeType) {
+            const colorMap = {
+                'Junction': '#e74c3c',  // 红色
+                'Reservoir': '#3498db', // 蓝色
+                'Tank': '#2ecc71',      // 绿色
+                'Pump': '#9b59b6',      // 紫色
+                'Valve': '#f39c12',     // 橙色
+                'WaterPlant': '#d35400' // 深橙色/棕色 - 水厂颜色
+            };
+            return colorMap[nodeType] || '#e74c3c'; // 默认红色
+        },
+        onScheduleCompleted() {
+            this.isScheduleRunCompleted = true;
+        },
+        getNodeRadius(nodeType) {
+            if (nodeType === 'WaterPlant') {
+                return 7; // 水厂节点稍大一些
+            }
+            return 5; // 默认节点大小
+        },
+
+        // 修改元素详情弹窗中显示的类型名称
+        getElementTypeName(element) {
+            // 首先检查是否是水厂
+            if (element && element.is_water_plant === true) {
+                return '水厂';
+            }
+
+            // 如果不是水厂，再判断其他类型
+            if (element.node_type) {
+                switch (element.node_type) {
+                    case 'Junction': return '节点';
+                    case 'Reservoir': return '水库';
+                    case 'Tank': return '水箱';
+                    default: return element.node_type;
+                }
+            } else if (element.link_type) {
+                switch (element.link_type) {
+                    case 'Pipe': return '管道';
+                    case 'Pump': return '水泵';
+                    case 'Valve': return '阀门';
+                    default: return element.link_type;
+                }
+            }
+            return '未知';
+        },
         updateSvgSize() {
             if (this.$refs.networkContainer) {
                 this.svgWidth = this.$refs.networkContainer.clientWidth;
@@ -482,6 +737,12 @@ export default {
         },
 
         getElementTypeName(element) {
+            // 首先检查是否是水厂
+            if (element.is_water_plant) {
+                return '水厂';
+            }
+
+            // 如果不是水厂，再判断其他类型
             if (element.node_type) {
                 switch (element.node_type) {
                     case 'Junction': return '节点';
@@ -497,12 +758,13 @@ export default {
                     default: return element.link_type;
                 }
             }
-            return '未知';
+            return '未知类型';
         },
 
         openElementPopup(element) {
             this.selectedElement = element;
             this.showElementPopup = true;
+            console.log('Selected element:', this.selectedElement);
         },
 
         closeElementPopup() {
@@ -532,7 +794,7 @@ export default {
             // 3秒后自动关闭
             setTimeout(() => {
                 this.closeNotification();
-            }, 3000);
+            }, 5000);
         },
 
         closeNotification() {
@@ -712,7 +974,7 @@ export default {
                 if (response.data.success) {
                     // 获取模拟后的网络数据
                     const simulatedData = response.data.network_data;
-
+                    this.scheduledData = JSON.parse(JSON.stringify(response.data.network_data));
                     if (simulatedData && simulatedData.nodes) {
                         // 处理节点坐标
                         simulatedData.nodes = simulatedData.nodes.map(node => {
@@ -743,6 +1005,7 @@ export default {
                         this.scale = currentScale;
 
                         this.showNotification('模拟完成，网络数据已更新', 'success');
+                        this.hasRunSchedule = true;
                     } else {
                         this.showNotification('模拟完成，但返回的数据格式不正确', 'error');
                     }
@@ -755,6 +1018,479 @@ export default {
             } finally {
                 this.isSimulating = false;
             }
+        },
+        async generateRandomDemands() {
+            try {
+                this.showNotification('正在生成随机需水量...', 'info');
+
+                const response = await axios.post('http://localhost:5000/api/scheduler/network/generate-random');
+
+                if (response.data.success) {
+                    // 更新网络数据
+                    const updatedData = response.data.data;
+
+                    // 处理节点坐标
+                    if (updatedData && updatedData.nodes) {
+                        updatedData.nodes = updatedData.nodes.map(node => {
+                            if (node.coordinates && Array.isArray(node.coordinates) && node.coordinates.length >= 2) {
+                                const width = 1000;
+                                const height = 600;
+
+                                return {
+                                    ...node,
+                                    x: node.coordinates[0] * width,
+                                    y: node.coordinates[1] * height
+                                };
+                            }
+                            return node;
+                        });
+                    }
+
+                    // 保存当前的视图状态
+                    const currentTranslateX = this.translateX;
+                    const currentTranslateY = this.translateY;
+                    const currentScale = this.scale;
+
+                    // 更新网络数据
+                    this.networkData = updatedData;
+
+                    // 恢复视图状态
+                    this.translateX = currentTranslateX;
+                    this.translateY = currentTranslateY;
+                    this.scale = currentScale;
+
+                    this.showNotification('随机需水量生成成功', 'success');
+                     this.hasRunSchedule=false;
+                } else {
+                    this.showNotification(`生成失败: ${response.data.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('生成随机需水量出错:', error);
+                this.showNotification(`生成随机需水量出错: ${error.message}`, 'error');
+            }
+        },
+
+        // 打开导入模态框
+        openImportModal() {
+            this.showImportModal = true;
+            this.selectedFileName = '';
+            this.selectedFile = null;
+            this.importError = null;
+        },
+
+
+        // 关闭导入模态框
+        closeImportModal() {
+            this.showImportModal = false;
+            this.selectedFileName = '';
+            this.selectedFile = null;
+            this.importError = null;
+        },
+
+        // 导入需水量数据
+        async importDemands() {
+            if (!this.selectedFile) {
+                this.importError = "请先选择文件";
+                return;
+            }
+
+            try {
+                this.isImporting = true;
+                this.importError = "";
+
+                const formData = new FormData();
+                formData.append('file', this.selectedFile);
+
+                // 使用正确的API路径
+                const response = await axios.post('http://localhost:5000/api/scheduler/network/import-demands', formData);
+
+                if (response.data.success) {
+                    // 更新网络数据
+                    const updatedData = response.data.data;
+
+                    // 处理节点坐标，类似于updateDemand方法
+                    if (updatedData && updatedData.nodes) {
+                        updatedData.nodes = updatedData.nodes.map(node => {
+                            // 保留原有的水厂标记
+                            const originalNode = this.networkData.nodes.find(n => n.id === node.id);
+                            const isWaterPlant = originalNode ? originalNode.is_water_plant : false;
+
+                            if (node.coordinates && Array.isArray(node.coordinates) && node.coordinates.length >= 2) {
+                                const width = 1000;
+                                const height = 600;
+
+                                return {
+                                    ...node,
+                                    x: node.coordinates[0] * width,
+                                    y: node.coordinates[1] * height,
+                                    is_water_plant: isWaterPlant // 保留水厂标记
+                                };
+                            }
+                            return {
+                                ...node,
+                                is_water_plant: isWaterPlant // 保留水厂标记
+                            };
+                        });
+                    }
+
+                    // 保存当前的视图状态
+                    const currentTranslateX = this.translateX || 0;
+                    const currentTranslateY = this.translateY || 0;
+                    const currentScale = this.scale || 1;
+
+                    // 更新网络数据
+                    this.networkData = updatedData;
+
+                    // 恢复视图状态
+                    this.translateX = currentTranslateX;
+                    this.translateY = currentTranslateY;
+                    this.scale = currentScale;
+
+                    this.closeImportModal();
+                    this.showNotification('成功导入需水量数据', 'success');
+                    this.hasRunSchedule = false;
+                    // 重新渲染网络图
+                    this.$nextTick(() => {
+                        this.renderNetwork();
+                    });
+                } else {
+                    this.importError = response.data.error || "导入失败";
+                }
+            } catch (error) {
+                console.error("导入需水量数据出错:", error);
+                if (error.response) {
+                    console.error("错误状态码:", error.response.status);
+                    console.error("错误数据:", error.response.data);
+                }
+                this.importError = error.response?.data?.error || error.message || "导入过程中发生错误";
+            } finally {
+                this.isImporting = false;
+            }
+        },
+
+        // 添加renderNetwork方法
+        renderNetwork() {
+            if (!this.networkData || !this.networkData.nodes || !this.networkData.links) {
+                console.warn('没有可用的网络数据进行渲染');
+                return;
+            }
+
+            // 清除现有的SVG内容
+            const container = d3.select("#network-svg-container");
+            container.selectAll("svg").remove();
+
+            // 创建新的SVG元素
+            const svg = container.append("svg")
+                .attr("width", "100%")
+                .attr("height", "600px")
+                .call(d3.zoom().on("zoom", (event) => {
+                    // 更新视图状态
+                    this.scale = event.transform.k;
+                    this.translateX = event.transform.x;
+                    this.translateY = event.transform.y;
+
+                    // 应用变换
+                    g.attr("transform", event.transform);
+                }));
+
+            // 应用当前的变换
+            const g = svg.append("g");
+            if (this.scale && this.translateX !== undefined && this.translateY !== undefined) {
+                g.attr("transform", `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
+            }
+
+            // 绘制连接线
+            g.selectAll("line")
+                .data(this.networkData.links)
+                .enter()
+                .append("line")
+                .attr("x1", d => {
+                    const sourceNode = this.networkData.nodes.find(node => node.id === d.source);
+                    return sourceNode && !isNaN(sourceNode.x) ? sourceNode.x : 0;
+                })
+                .attr("y1", d => {
+                    const sourceNode = this.networkData.nodes.find(node => node.id === d.source);
+                    return sourceNode && !isNaN(sourceNode.y) ? sourceNode.y : 0;
+                })
+                .attr("x2", d => {
+                    const targetNode = this.networkData.nodes.find(node => node.id === d.target);
+                    return targetNode && !isNaN(targetNode.x) ? targetNode.x : 0;
+                })
+                .attr("y2", d => {
+                    const targetNode = this.networkData.nodes.find(node => node.id === d.target);
+                    return targetNode && !isNaN(targetNode.y) ? targetNode.y : 0;
+                })
+                .attr("class", d => `link ${d.link_type.toLowerCase()}`);
+
+            // 绘制节点
+            const nodes = g.selectAll("circle")
+                .data(this.networkData.nodes)
+                .enter()
+                .append("circle")
+                .attr("cx", d => !isNaN(d.x) ? d.x : 0)
+                .attr("cy", d => !isNaN(d.y) ? d.y : 0)
+                .attr("r", d => d.is_water_plant ? 8 : 5) // 水厂节点稍大一些
+                .attr("class", d => {
+                    // 根据节点类型和是否为水厂设置不同的类
+                    if (d.is_water_plant) {
+                        return 'water-plant';
+                    } else {
+                        return d.type.toLowerCase();
+                    }
+                })
+                .on("click", (event, d) => {
+                    // 点击节点时显示详情或执行其他操作
+                    this.showNodeDetails(d);
+                });
+
+            // 添加节点标签
+            g.selectAll("text")
+                .data(this.networkData.nodes)
+                .enter()
+                .append("text")
+                .attr("x", d => !isNaN(d.x) ? d.x + 8 : 8)
+                .attr("y", d => !isNaN(d.y) ? d.y + 3 : 3)
+                .text(d => {
+                    // 为水厂添加特殊标记
+                    return d.is_water_plant ? `${d.id} (水厂)` : d.id;
+                })
+                .attr("font-size", "10px")
+                .attr("fill", "#333");
+        },
+
+        // 添加显示节点详情的方法
+        showNodeDetails(node) {
+            // 设置更新需水量表单的初始值
+            this.updateDemandForm = {
+                nodeId: node.id,
+                demand: node.demand || 0
+            };
+
+            // 显示节点详情或更新需水量的模态框
+            this.showUpdateDemandModal = true;
+        },
+
+
+        // 打开修改需水量模态框
+        openUpdateDemandModal() {
+            this.showUpdateDemandModal = true;
+            this.updateDemandError = null;
+            this.updateDemandForm = {
+                nodeId: '',
+                demand: null
+            };
+        },
+
+        // 关闭修改需水量模态框
+        closeUpdateDemandModal() {
+            this.showUpdateDemandModal = false;
+        },
+
+        // 更新节点需水量
+        async updateDemand() {
+            if (!this.updateDemandForm.nodeId) {
+                this.updateDemandError = '请输入节点ID';
+                return;
+            }
+
+            if (this.updateDemandForm.demand === null || isNaN(this.updateDemandForm.demand) || this.updateDemandForm.demand < 0) {
+                this.updateDemandError = '请输入有效的需水量值（大于等于0）';
+                return;
+            }
+
+            try {
+                this.isUpdatingDemand = true;
+                this.updateDemandError = null;
+
+                const response = await axios.post('http://localhost:5000/api/scheduler/network/update-demand', {
+                    node_id: this.updateDemandForm.nodeId,
+                    demand: parseFloat(this.updateDemandForm.demand)
+                });
+
+                if (response.data.success) {
+                    // 更新网络数据
+                    const updatedData = response.data.data;
+
+                    // 处理节点坐标
+                    if (updatedData && updatedData.nodes) {
+                        updatedData.nodes = updatedData.nodes.map(node => {
+                            if (node.coordinates && Array.isArray(node.coordinates) && node.coordinates.length >= 2) {
+                                const width = 1000;
+                                const height = 600;
+
+                                return {
+                                    ...node,
+                                    x: node.coordinates[0] * width,
+                                    y: node.coordinates[1] * height
+                                };
+                            }
+                            return node;
+                        });
+                    }
+
+                    // 保存当前的视图状态
+                    const currentTranslateX = this.translateX;
+                    const currentTranslateY = this.translateY;
+                    const currentScale = this.scale;
+
+                    // 更新网络数据
+                    this.networkData = updatedData;
+
+                    // 恢复视图状态
+                    this.translateX = currentTranslateX;
+                    this.translateY = currentTranslateY;
+                    this.scale = currentScale;
+
+                    this.closeUpdateDemandModal();
+                    this.showNotification(`成功更新节点 ${this.updateDemandForm.nodeId} 的需水量`, 'success');
+                    this.hasRunSchedule=false;
+                } else {
+                    this.updateDemandError = response.data.error;
+                }
+            } catch (error) {
+                console.error('更新需水量出错:', error);
+                this.updateDemandError = error.response?.data?.error || error.message;
+            } finally {
+                this.isUpdatingDemand = false;
+            }
+        },
+        triggerFileInput() {
+            this.$refs.fileInput.click();
+        },
+
+        // 处理文件选择变化
+        handleFileChange(event) {
+            const file = event.target.files[0];
+            if (file) {
+                this.selectedFileName = file.name;
+                this.selectedFile = file;
+                this.importError = null; // 清除之前的错误
+                console.log('已选择文件:', file.name);
+            } else {
+                this.selectedFileName = '';
+                this.selectedFile = null;
+            }
+        },
+        // 热力图生成函数
+        generateHeatmap(event) {
+            // 阻止默认行为
+            if (event) event.preventDefault();
+
+            // 显示加载提示
+            const loadingElement = document.createElement('div');
+            loadingElement.className = 'loading-overlay';
+            loadingElement.innerHTML = '<div class="loading-spinner"></div><div>正在生成热力图...</div>';
+            document.body.appendChild(loadingElement);
+
+            // 发送请求 - 期望返回的是图像而不是JSON
+            fetch('http://localhost:5000/api/scheduler/network/heatmap', {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                credentials: 'same-origin'
+            })
+                .then(response => {
+                    // 移除加载提示
+                    document.body.removeChild(loadingElement);
+
+                    if (!response.ok) {
+                        // 如果响应不成功，尝试解析错误信息
+                        return response.json().then(errorData => {
+                            throw new Error(errorData.error || `HTTP错误 ${response.status}`);
+                        });
+                    }
+
+                    // 检查内容类型
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/json')) {
+                        // 如果返回的是JSON（可能是错误信息），则解析JSON
+                        return response.json().then(data => {
+                            if (!data.success) {
+                                throw new Error(data.error || '未知错误');
+                            }
+                            // 这种情况不应该发生，因为我们期望图像数据
+                            throw new Error('服务器返回了JSON而不是图像');
+                        });
+                    }
+
+                    // 正常情况下，返回的是图像数据
+                    return response.blob();
+                })
+                .then(blob => {
+                    // 创建一个临时URL来表示Blob数据
+                    const imageUrl = URL.createObjectURL(blob);
+                    this.showHeatmapImage(imageUrl);
+                })
+                .catch(error => {
+                    // 移除加载提示（如果尚未移除）
+                    if (document.body.contains(loadingElement)) {
+                        document.body.removeChild(loadingElement);
+                    }
+                    console.error('热力图生成错误:', error);
+                    alert('请求失败: ' + error.message);
+                });
+        },
+
+        // 显示热力图图像的函数
+        showHeatmapImage(imageUrl) {
+            console.log('显示热力图');
+
+            // 创建一个模态框来显示图片
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.position = 'fixed';
+            modal.style.top = '0';
+            modal.style.left = '0';
+            modal.style.width = '100%';
+            modal.style.height = '100%';
+            modal.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            modal.style.display = 'flex';
+            modal.style.justifyContent = 'center';
+            modal.style.alignItems = 'center';
+            modal.style.zIndex = '1000';
+
+            modal.innerHTML = `
+    <div class="modal-content" style="background-color: white; padding: 20px; border-radius: 5px; max-width: 90%; max-height: 90%; position: relative; overflow: auto;">
+        <span class="close-button" style="position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #555;">&times;</span>
+        <h3 style="margin-top: 0; text-align: center;">压力热力图</h3>
+        <div class="image-container" style="text-align: center;">
+            <img src="${imageUrl}" alt="热力图" style="max-width: 100%; max-height: 80vh;" />
+        </div>
+        <div style="text-align: center; margin-top: 15px;">
+            <button id="download-heatmap" style="padding: 8px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">下载热力图</button>
+        </div>
+    </div>
+    `;
+            document.body.appendChild(modal);
+
+            // 添加关闭按钮事件
+            const closeButton = modal.querySelector('.close-button');
+            closeButton.addEventListener('click', () => {
+                document.body.removeChild(modal);
+                // 释放Blob URL以避免内存泄漏
+                URL.revokeObjectURL(imageUrl);
+            });
+
+            // 点击模态框背景也可以关闭
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    document.body.removeChild(modal);
+                    // 释放Blob URL以避免内存泄漏
+                    URL.revokeObjectURL(imageUrl);
+                }
+            });
+
+            // 添加下载按钮事件
+            const downloadButton = modal.querySelector('#download-heatmap');
+            downloadButton.addEventListener('click', () => {
+                const link = document.createElement('a');
+                link.href = imageUrl;
+                link.download = 'network_heatmap.png';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
         }
 
     }
@@ -1029,5 +1765,225 @@ export default {
 
 .close-btn:hover {
     color: #343a40;
+}
+/* 在现有的 <style> 标签内添加 */
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.form-control {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.form-text {
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.alert {
+    padding: 10px 15px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.alert-danger {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.mr-2 {
+    margin-right: 8px;
+}
+
+.mt-3 {
+    margin-top: 15px;
+}
+.file-input-container {
+    margin-top: 8px;
+}
+
+.file-input-box {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 8px 12px;
+    cursor: pointer;
+    background-color: #fff;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    color: #666;
+}
+
+.file-input-box:hover {
+    border-color: #999;
+}
+/* 在<style>部分修改水厂的样式 */
+/* 在<style>部分修改水厂的样式 */
+.water-plant {
+    fill: #d300b7;
+    /* 使用深橙色/赭石色 */
+    stroke: #333;
+    stroke-width: 1.5px;
+}
+
+.legend-color.water-plant {
+    background-color: #d300b7;
+}
+.demand-label {
+    filter: drop-shadow(0px 0px 2px white);
+}
+.demand-box {
+    filter: drop-shadow(0px 1px 3px rgba(0, 0, 0, 0.2));
+    pointer-events: none;
+    /* 确保框不会阻止点击事件 */
+}
+
+.demand-label {
+    pointer-events: none;
+    /* 确保文本不会阻止点击事件 */
+}
+.network-water-plants {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    z-index: 10;
+}
+
+.panel-header {
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #d35400;
+    /* 橙色标题 */
+    border-bottom: 1px solid #eee;
+    padding-bottom: 3px;
+}
+
+.water-plant-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.water-plant-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 3px 0;
+    font-size: 12px;
+    color: #d35400;
+    /* 使所有文字都是橙色 */
+}
+
+.water-plant-id {
+    margin-right: 8px;
+    font-weight: 500;
+}
+
+.water-plant-demand {
+    /* 不需要单独设置颜色，继承父元素颜色 */
+}
+.export-buttons {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 100;
+}
+
+.export-buttons button {
+    width: 120px;
+    text-align: left;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    z-index: 9999;
+}
+
+.loading-spinner {
+    border: 5px solid #f3f3f3;
+    border-top: 5px solid #3498db;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    animation: spin 2s linear infinite;
+    margin-bottom: 10px;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 20px;
+    border-radius: 5px;
+    max-width: 90%;
+    max-height: 90%;
+    overflow: auto;
+    position: relative;
+}
+
+.close-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+.image-container {
+    text-align: center;
+    margin-top: 10px;
+}
+
+.image-container img {
+    max-width: 100%;
+    max-height: 70vh;
 }
 </style>
