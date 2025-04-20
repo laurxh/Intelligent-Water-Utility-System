@@ -136,28 +136,44 @@ def run_simulation():
             "traceback": error_trace
         }), 500
 
-def export_network_data(after_simulation=False):
+def export_network_data(after_simulation=False, hour=0):
     """
     导出管网数据，用于前端绘制管网拓扑图
     
     参数:
-        inp_file_path (str): INP文件路径
         after_simulation (bool): 是否导出模拟后的管网数据，默认为False表示导出模拟前的原始数据
+        hour (int): 要获取的模拟时间（小时），默认为0表示模拟开始时刻
     
     返回:
         dict: 包含nodes和links的字典
             nodes: 所有节点的列表，每个节点包含id、坐标、类型、需求等信息
             links: 所有连接的列表，每个连接包含id、起点id、终点id、类型等信息
     """
-    # 加载水力网络模型
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # 构建inp文件的绝对路径
-    inp_file_path = os.path.join(BASE_DIR,'Water-Hydraulic-Simulation', 'networks', 'Net2.inp')
+    networks_dir = os.path.join(BASE_DIR, 'Water-Hydraulic-Simulation', 'networks')
+    inp_files = [f for f in os.listdir(networks_dir) if f.endswith('.inp')]
+
+    if not inp_files:
+        raise FileNotFoundError(f"在 {networks_dir} 目录下没有找到.inp文件")
+
+    if len(inp_files) > 1:
+        print(f"警告: 在目录下发现多个.inp文件: {inp_files}，将使用第一个文件")
+
+    # 使用找到的第一个.inp文件
+    inp_file_name = inp_files[0]
+    inp_file_path = os.path.join(networks_dir, inp_file_name)
+
+    print(f"使用的inp文件: {inp_file_path}")
+    
+    # 加载水力网络模型
     wn = wntr.network.WaterNetworkModel(inp_file_path)
     print(f"加载网络模型: {inp_file_path}")
     
     # 如果需要模拟后的数据，则运行模拟
     results = None
+    time_step_index = 0  # 默认使用第一个时间步（0小时）
+    
     if after_simulation:
         try:
             print("开始运行EPANET模拟...")
@@ -165,6 +181,27 @@ def export_network_data(after_simulation=False):
             sim = wntr.sim.EpanetSimulator(wn)
             results = sim.run_sim()
             print("EPANET模拟完成")
+            
+            # 获取所有时间步
+            time_steps = results.node['pressure'].index
+            print(f"模拟生成了 {len(time_steps)} 个时间步")
+            
+            # 如果指定了hour=0，直接使用第一个时间步
+            if hour == 0:
+                time_step_index = 0
+                current_time = time_steps[time_step_index]
+                print(f"使用第一个时间步（模拟开始时刻）: 索引={time_step_index}, 实际时间={current_time}秒")
+            else:
+                # 查找对应于指定小时的时间步
+                target_time = hour * 3600  # 转换为秒
+                
+                # 查找最接近目标时间的时间步
+                time_differences = [abs(t - target_time) for t in time_steps]
+                time_step_index = time_differences.index(min(time_differences))
+                
+                current_time = time_steps[time_step_index]
+                print(f"找到最接近 {hour} 小时的时间步: 索引={time_step_index}, 实际时间={current_time}秒")
+            
         except Exception as e:
             print(f"运行模拟时出错: {str(e)}")
             # 如果模拟失败，返回原始数据
@@ -178,28 +215,28 @@ def export_network_data(after_simulation=False):
         node_data = {
             'id': node_id,
             'node_type': node.node_type,
-            'x': node.coordinates[0] if node.coordinates else 0,
-            'y': node.coordinates[1] if node.coordinates else 0,
+            'coordinates': list(node.coordinates) if node.coordinates else [0, 0],
         }
         
         # 针对不同类型节点添加特定属性
         if node.node_type == 'Junction':
             # 对于模拟前的数据，添加基本需水量
-            node_data['base_demand'] = node.base_demand
-            node_data['demand_unit'] = 'm^3/s'  # 单位为立方米/秒
+            if not after_simulation:
+                node_data['base_demand'] = node.base_demand
+                node_data['demand_unit'] = 'm^3/s'  # 单位为立方米/秒
             
             node_data['elevation'] = node.elevation
             
             # 如果是模拟后的数据，添加压力和实际水量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的压力数据
-                    pressure = results.node['pressure'].loc[results.node['pressure'].index[-1], node_id]
+                    # 获取指定时间步的压力数据
+                    pressure = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
                     node_data['pressure'] = round(float(pressure), 10)  # 保留两位小数
                     node_data['pressure_unit'] = 'm'  # 单位为米
                     
-                    # 获取最后一个时间步的实际需水量数据
-                    actual_demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    # 获取指定时间步的实际需水量数据
+                    actual_demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['actual_demand'] = round(float(actual_demand), 10)  # 保留三位小数
                 except Exception as e:
                     print(f"获取节点 {node_id} 压力/需水量数据时出错: {str(e)}")
@@ -213,10 +250,10 @@ def export_network_data(after_simulation=False):
             if after_simulation and results is not None:
                 try:
                     # 水库的压力头
-                    head = results.node['head'].loc[results.node['head'].index[-1], node_id]
+                    head = results.node['head'].loc[results.node['head'].index[time_step_index], node_id]
                     node_data['current_head'] = round(float(head), 2)
                     # 水库的出水量
-                    demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['outflow'] = round(float(demand), 10)  # 水库出水为负需水量
                 except Exception as e:
                     print(f"获取水库 {node_id} 数据时出错: {str(e)}")
@@ -230,9 +267,12 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前水位信息和流量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的水位数据
+                    # 获取指定时间步的水位数据
+                    current_level = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
+                    node_data['current_level'] = round(float(current_level), 2)
+                    
                     # 获取水箱的流入/流出量
-                    demand = results.node['demand'].loc[results.node['demand'].index[-1], node_id]
+                    demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['inflow'] = round(float(demand), 10)  # 水箱流入为负需水量
                 except Exception as e:
                     print(f"获取水箱 {node_id} 水位/流量数据时出错: {str(e)}")
@@ -260,8 +300,8 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加流量信息
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的流量数据
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的流量数据
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
                 except Exception as e:
                     print(f"获取管道 {link_id} 流量数据时出错: {str(e)}")
@@ -274,9 +314,9 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前开关状态和流量
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的状态和流量数据
-                    status = results.link['status'].loc[results.link['status'].index[-1], link_id]
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的状态和流量数据
+                    status = results.link['status'].loc[results.link['status'].index[time_step_index], link_id]
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['current_status'] = "Open" if float(status) > 0 else "Closed"
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
                     link_data['flow_unit'] = 'm^3/s'  # 单位为立方米/秒
@@ -293,9 +333,9 @@ def export_network_data(after_simulation=False):
             # 如果是模拟后的数据，添加当前开关状态和流量
             if after_simulation and results is not None:
                 try:
-                    # 获取最后一个时间步的状态和流量数据
-                    status = results.link['status'].loc[results.link['status'].index[-1], link_id]
-                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[-1], link_id]
+                    # 获取指定时间步的状态和流量数据
+                    status = results.link['status'].loc[results.link['status'].index[time_step_index], link_id]
+                    flow = results.link['flowrate'].loc[results.link['flowrate'].index[time_step_index], link_id]
                     link_data['current_status'] = "Open" if float(status) > 0 else "Closed"
                     link_data['flow'] = round(float(flow), 10)  # 保留三位小数
                     link_data['flow_unit'] = 'm^3/s'  # 单位为立方米/秒
@@ -308,10 +348,10 @@ def export_network_data(after_simulation=False):
     
     # 归一化节点坐标到0-1范围，便于前端显示
     # 找出坐标的最大值和最小值
-    min_x = min(node['x'] for node in nodes)
-    max_x = max(node['x'] for node in nodes)
-    min_y = min(node['y'] for node in nodes)
-    max_y = max(node['y'] for node in nodes)
+    min_x = min(node['coordinates'][0] for node in nodes)
+    max_x = max(node['coordinates'][0] for node in nodes)
+    min_y = min(node['coordinates'][1] for node in nodes)
+    max_y = max(node['coordinates'][1] for node in nodes)
     
     # 计算坐标范围
     x_range = max_x - min_x
@@ -327,9 +367,10 @@ def export_network_data(after_simulation=False):
     
     # 归一化所有节点坐标
     for node in nodes:
-        node['x'] = (node['x'] - min_x) / x_range
-        node['y'] = (node['y'] - min_y) / y_range
+        node['coordinates'][0] = (node['coordinates'][0] - min_x) / x_range
+        node['coordinates'][1] = (node['coordinates'][1] - min_y) / y_range
     
+    # 打印一些调试信息
     print(f"导出节点数量: {len(nodes)}, 连接数量: {len(links)}")
     
     return {'nodes': nodes, 'links': links}
