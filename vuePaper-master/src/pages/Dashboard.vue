@@ -10,6 +10,12 @@
           <i class="ti-upload"></i> 导入INP文件
         </label>
         <input type="file" id="inp-file-upload" accept=".inp" @change="uploadInpFile" style="display: none;">
+        <button class="btn btn-success btn-sm" @click="generateCoverageMap" :disabled="!networkData">
+          <i class="ti-map"></i> 生成监测率图
+        </button>
+        <button class="btn btn-info btn-sm" @click="generatePlan" :disabled="!networkData">
+          <i class="ti-agenda"></i> 生成方案
+        </button>
       </div>
     </div>
     <div v-if="notificationVisible" :class="['notification', notificationType]">
@@ -241,7 +247,102 @@
         </div>
       </div>
     </div>
+    <!-- 方案详情弹窗 -->
+    <div v-if="showPlanPopup" class="element-popup-overlay" @click="closePlanPopup">
+      <div class="element-popup" @click.stop style="width: 80%; max-width: 800px;">
+        <div class="element-popup-header">
+          <h5>方案详情</h5>
+          <button class="close-btn" @click="closePlanPopup">×</button>
+        </div>
+        <div class="element-popup-body" style="max-height: 70vh; overflow-y: auto;">
+          <div v-if="planDetails">
+            <h6>优化方案信息</h6>
+            <div class="plan-info">
+              <div class="detail-item">
+                <span class="detail-label">方案编号:</span>
+                <span class="detail-value">{{ planDetails.plan_id || '未指定' }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">监测率:</span>
+                <span class="detail-value">{{ (planDetails.coverage * 100).toFixed(2) }}%</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">观测点数量:</span>
+                <span class="detail-value">{{ planDetails.sensor_count || 0 }}</span>
+              </div>
+            </div>
 
+            <h6 class="mt-4">观测点列表</h6>
+            <table class="table table-striped table-sm">
+              <thead>
+                <tr>
+                  <th>序号</th>
+                  <th>节点ID</th>
+                  <th>节点类型</th>
+                  <th>监测区域</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(sensor, index) in planDetails.sensors" :key="index">
+                  <td>{{ index + 1 }}</td>
+                  <td>{{ sensor.node_id }}</td>
+                  <td>{{ sensor.node_type }}</td>
+                  <td>{{ sensor.coverage_area ? sensor.coverage_area.join(', ') : '未指定' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="alert alert-info">
+            <i class="ti-info-circle mr-2"></i>
+            暂无方案数据
+          </div>
+        </div>
+        <div class="element-popup-footer">
+          <button class="btn btn-secondary" @click="closePlanPopup">关闭</button>
+          <button class="btn btn-primary" @click="exportPlan" v-if="planDetails">导出方案</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showCoveragePopup" class="element-popup-overlay" @click="closeCoveragePopup">
+      <div class="element-popup" @click.stop style="width: 80%; max-width: 800px;">
+        <div class="element-popup-header">
+          <h5>水网络监测分析</h5>
+          <button class="close-btn" @click="closeCoveragePopup">×</button>
+        </div>
+        <div class="element-popup-body">
+          <div class="coverage-chart-container">
+            <canvas ref="coverageChart"></canvas>
+          </div>
+
+          <div class="coverage-table mt-4">
+            <h6>监测距离数据表</h6>
+            <div class="table-responsive">
+              <table class="table table-striped table-sm">
+                <thead>
+                  <tr>
+                    <th>布置点数</th>
+                    <!-- 修改列标题 -->
+                    <th>最大监测距离(m)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(coverage, points) in coverageData" :key="points">
+                    <td>{{ points }}</td>
+                    <!-- 直接显示为距离值，不添加百分号 -->
+                    <td>{{ parseFloat(coverage).toFixed(2) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+        <div class="element-popup-footer">
+          <button class="btn btn-secondary" @click="closeCoveragePopup">关闭</button>
+          <button class="btn btn-primary" @click="exportCoverageData">导出数据</button>
+        </div>
+      </div>
+    </div>
     <!-- 底部分隔线 -->
     <hr class="mt-5 mb-4">
 
@@ -258,7 +359,7 @@
 
 <script>
 import axios from 'axios';
-
+import Chart from 'chart.js/auto'  // 使用新版本的导入方式
 export default {
   data() {
     return {
@@ -266,7 +367,8 @@ export default {
       notificationType: 'success',
       notificationMessage: '',
       notificationIcon: 'ti-check-circle',
-
+      planDetails: null,
+      showPlanPopup: false,
       // 网络数据
       networkData: null,
       loadingNetwork: false,
@@ -286,7 +388,11 @@ export default {
       translateY: 0,
       isDragging: false,
       dragStartX: 0,
-      dragStartY: 0
+      dragStartY: 0,
+      coverageData: null,
+      showCoveragePopup: false,
+      coverageChartInstance: null,
+      
     };
   },
 
@@ -324,8 +430,254 @@ export default {
     document.removeEventListener('touchmove', this.handleTouchMove);
     document.removeEventListener('touchend', this.handleTouchEnd);
   },
-
   methods: {
+    // 在 methods 中添加以下方法
+    async generateCoverageMap() {
+      if (!this.networkData) {
+        this.displayNotification('error', '请先导入INP文件');
+        return;
+      }
+
+      try {
+        this.displayNotification('info', '正在生成监测率图...');
+
+        const response = await axios.post('http://localhost:5000/api/hydraulic/generate-coverage-map');
+
+        if (response.data.success) {
+          this.displayNotification('success', '监测率图生成成功');
+
+          // 如果后端返回了监测率数据，显示监测率图
+          if (response.data.coverage_data) {
+            this.coverageData = response.data.coverage_data;
+            console.log(response.data.coverage_data)
+            this.showCoveragePopup = true;
+            this.renderCoverageChart();
+          }
+        } else {
+          this.displayNotification('error', '生成监测率图失败: ' + response.data.error);
+        }
+      } catch (error) {
+        console.error('生成监测率图出错:', error);
+        this.displayNotification('error', '生成监测率图出错: ' + (error.response?.data?.error || error.message));
+      }
+    },
+
+    // 在renderCoverageChart方法中修改
+    renderCoverageChart() {
+      this.$nextTick(() => {
+        if (this.$refs.coverageChart) {
+          // 准备图表数据
+          const points = Object.keys(this.coverageData);
+
+          // 确保数据是数值类型，移除可能的百分号，并直接使用值
+          const coverageValues = Object.values(this.coverageData).map(value => {
+            // 如果值是字符串且包含百分号，移除百分号并转换为数值
+            if (typeof value === 'string' && value.includes('%')) {
+              return parseFloat(value.replace('%', ''));
+            }
+            return parseFloat(value);
+          });
+
+          // 如果已经有图表实例，先销毁它
+          if (this.coverageChartInstance) {
+            this.coverageChartInstance.destroy();
+          }
+
+          // 创建新的图表
+          const ctx = this.$refs.coverageChart.getContext('2d');
+          this.coverageChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: points,
+              datasets: [{
+                label: '最大监测距离 (m)',
+                data: coverageValues,
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                borderColor: 'rgba(75, 192, 192, 1)',
+                borderWidth: 2,
+                pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+                pointRadius: 3,
+                tension: 0.1
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  // 移除固定最大值，让图表自动适应数据范围
+                  title: {
+                    display: true,
+                    text: '最大监测距离 (m)'
+                  }
+                },
+                x: {
+                  title: {
+                    display: true,
+                    text: '布置点数'
+                  }
+                }
+              },
+              plugins: {
+                title: {
+                  display: true,
+                  text: '水网络监测距离分析',
+                  font: {
+                    size: 16
+                  }
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (context) {
+                      return `最大监测距离: ${context.parsed.y.toFixed(2)}m`;
+                    }
+                  }
+                }
+              }
+            }
+          });
+        }
+      });
+    },
+
+    // 同时修改exportCoverageData方法中的CSV表头和数据格式
+    exportCoverageData() {
+      if (!this.coverageData) return;
+
+      try {
+        // 修改CSV表头
+        let csvContent = "布置点数,最大监测距离(m)\n";
+
+        Object.entries(this.coverageData).forEach(([points, coverage]) => {
+          // 处理可能包含百分号的值
+          let coverageValue = coverage;
+          if (typeof coverage === 'string' && coverage.includes('%')) {
+            coverageValue = parseFloat(coverage.replace('%', ''));
+          } else {
+            coverageValue = parseFloat(coverage);
+          }
+
+          csvContent += `${points},${coverageValue.toFixed(2)}\n`;
+        });
+
+        // 创建Blob对象
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+        // 创建下载链接
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'water_network_coverage_distance.csv';
+        document.body.appendChild(a);
+        a.click();
+
+        // 清理
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 0);
+
+        this.displayNotification('success', '监测距离数据已导出');
+      } catch (error) {
+        console.error('导出监测距离数据出错:', error);
+        this.displayNotification('error', '导出监测距离数据出错: ' + error.message);
+      }
+    },
+    closeCoveragePopup() {
+      this.showCoveragePopup = false;
+      // 如果存在图表实例，需要销毁它以防止内存泄漏
+      if (this.coverageChartInstance) {
+        this.coverageChartInstance.destroy();
+        this.coverageChartInstance = null;
+      }
+    },
+    // 生成方案
+    async generatePlan() {
+      if (!this.networkData) {
+        this.displayNotification('error', '请先导入INP文件');
+        return;
+      }
+
+      try {
+        this.displayNotification('info', '正在生成方案...');
+
+        const response = await axios.post('http://localhost:5000/api/hydraulic/generate-plan');
+
+        if (response.data.success) {
+          this.displayNotification('success', '方案生成成功');
+
+          // 如果后端返回了方案数据，可以在这里处理
+          if (response.data.plan_data) {
+            // 处理方案数据，例如显示在弹窗中
+            this.showPlanDetails(response.data.plan_data);
+          }
+        } else {
+          this.displayNotification('error', '生成方案失败: ' + response.data.error);
+        }
+      } catch (error) {
+        console.error('生成方案出错:', error);
+        this.displayNotification('error', '生成方案出错: ' + (error.response?.data?.error || error.message));
+      }
+    },
+    updateNetworkWithCoverageData(coverageData) {
+      // 这里可以根据监测率数据更新网络图的显示
+      // 例如，可以改变节点的颜色或大小来表示监测率
+
+      // 示例实现：
+      if (this.networkData && this.networkData.nodes) {
+        this.networkData.nodes.forEach(node => {
+          // 如果监测率数据中包含该节点的信息
+          if (coverageData[node.id]) {
+            // 为节点添加监测率属性
+            node.coverage = coverageData[node.id];
+          }
+        });
+
+        // 重新渲染网络图
+        this.$forceUpdate();
+      }
+    },
+
+    // 显示方案详情
+    showPlanDetails(planData) {
+      // 创建一个新的弹窗来显示方案详情
+      this.planDetails = planData;
+      this.showPlanPopup = true;
+    },
+    closePlanPopup() {
+      this.showPlanPopup = false;
+    },
+
+    // 导出方案
+    exportPlan() {
+      if (!this.planDetails) return;
+
+      try {
+        // 创建一个包含方案数据的Blob对象
+        const planJson = JSON.stringify(this.planDetails, null, 2);
+        const blob = new Blob([planJson], { type: 'application/json' });
+
+        // 创建下载链接
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `water_network_plan_${this.planDetails.plan_id || 'new'}.json`;
+        document.body.appendChild(a);
+        a.click();
+
+        // 清理
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 0);
+
+        this.displayNotification('success', '方案已导出');
+      } catch (error) {
+        console.error('导出方案出错:', error);
+        this.displayNotification('error', '导出方案出错: ' + error.message);
+      }
+    },
     updateSvgSize() {
       if (this.$refs.networkContainer) {
         this.svgWidth = this.$refs.networkContainer.clientWidth;
@@ -1210,5 +1562,67 @@ export default {
 
 .link:hover {
   stroke-width: 4px;
+}
+.control-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+/* 方案信息样式 */
+.plan-info {
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+/* 表格样式 */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.table-striped tbody tr:nth-of-type(odd) {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* 按钮间距 */
+.element-popup-footer .btn {
+  margin-left: 10px;
+}
+.coverage-chart-container {
+  height: 400px;
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.coverage-table {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.table-responsive {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.table-striped tbody tr:nth-of-type(odd) {
+  background-color: rgba(0, 0, 0, 0.05);
 }
 </style>
