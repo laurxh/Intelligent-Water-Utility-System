@@ -374,3 +374,146 @@ def export_network_data(after_simulation=False, hour=0):
     print(f"导出节点数量: {len(nodes)}, 连接数量: {len(links)}")
     
     return {'nodes': nodes, 'links': links}
+@hydraulic_bp.route('/generate-coverage-map', methods=['POST'])
+def generate_coverage_map():
+    """生成不同布置点数的覆盖率图"""
+    try:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        networks_dir = os.path.join(BASE_DIR, 'Water-Hydraulic-Simulation', 'networks')
+        inp_files = [f for f in os.listdir(networks_dir) if f.endswith('.inp')]
+
+        if not inp_files:
+            raise FileNotFoundError(f"在 {networks_dir} 目录下没有找到.inp文件")
+
+        if len(inp_files) > 1:
+            print(f"警告: 在目录下发现多个.inp文件: {inp_files}，将使用第一个文件")
+
+        # 使用找到的第一个.inp文件
+        inp_file_name = inp_files[0]
+        inp_file_path = os.path.join(networks_dir, inp_file_name)
+
+        # 加载水力网络模型
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 构建图结构
+        nodes = []
+        for node_id, node in wn.nodes():
+            print(node_id)
+            nodes.append(node_id)
+        G = {node: [] for node in nodes}
+        for link_id, link in wn.links():
+            start_node = link.start_node_name
+            end_node = link.end_node_name
+            # 使用链接长度作为权重，如果没有长度，则使用默认值1
+            weight = link.length if hasattr(link, 'length') and link.length else 1
+            
+            # 添加双向边
+            G[start_node].append((end_node, weight))
+            G[end_node].append((start_node, weight))
+        
+        # 计算不同布置点数的覆盖率
+        max_points = len(nodes)
+        coverage_data = {}
+        
+        # 初始化已选择的点
+        exist = {node: False for node in nodes}
+        selected_nodes = []
+        
+        # 选择第一个点（可以根据需要选择特定的起始点）
+        start_node = nodes[0]
+        exist[start_node] = True
+        selected_nodes.append(start_node)
+        coverage_data["1"] = calculate_coverage(nodes, G, exist)
+        
+        # 迭代选择剩余的点并计算覆盖率
+        for i in range(2, max_points + 1):
+            next_node = work(nodes, G, exist)
+            coverage_data[str(i)] = calculate_coverage(nodes, G, exist)
+        print(coverage_data)
+        return jsonify({
+            "success": True,
+            "message": "覆盖率图生成成功",
+            "coverage_data": coverage_data,
+        })
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+import heapq
+def work(nodes, G, exist):
+        """
+        寻找未被选择点中到已选择点最短距离最大的点,返回该点标识符
+        """
+        dist = {node: 1e9 for node in nodes}
+        pq = []
+        visited = {node: False for node in nodes}
+        
+        # 初始化已选择的点
+        for node in nodes:
+            if exist[node]:
+                dist[node] = 0
+                heapq.heappush(pq, (dist[node], node))
+        
+        # Dijkstra算法
+        while pq:
+            _, u = heapq.heappop(pq)
+            if visited[u]:
+                continue
+            visited[u] = True
+            
+            for v, w in G[u]:
+                if dist[v] > dist[u] + w:
+                    dist[v] = dist[u] + w
+                    heapq.heappush(pq, (dist[v], v))
+        
+        # 找到未选择点中距离最大的点
+        max_dist = -1
+        max_node = None
+        for node in nodes:
+            if exist[node]:
+                continue
+            if dist[node] > max_dist:
+                max_dist = dist[node]
+                max_node = node
+        
+        exist[max_node] = True
+        return max_node
+def calculate_coverage(nodes, G, exist):
+        """
+        计算覆盖率：(有监测点或相邻有监测点的节点数) / 总节点数
+        """
+        dist = {node: 1e9 for node in nodes}
+        pq = []
+        visited = {node: False for node in nodes}
+        
+        # 初始化已选择的点
+        for node in nodes:
+            if exist[node]:
+                dist[node] = 0
+                heapq.heappush(pq, (dist[node], node))
+        
+        # Dijkstra算法
+        while pq:
+            _, u = heapq.heappop(pq)
+            if visited[u]:
+                continue
+            visited[u] = True
+            
+            for v, w in G[u]:
+                if dist[v] > dist[u] + w:
+                    dist[v] = dist[u] + w
+                    heapq.heappush(pq, (dist[v], v))
+        
+        # 找到未选择点中距离最大的点
+        max_dist = 0
+        max_node = None
+        for node in nodes:
+            if exist[node]:
+                continue
+            if dist[node] > max_dist:
+                max_dist = dist[node]
+                max_node = node
+        
+        return max_dist
