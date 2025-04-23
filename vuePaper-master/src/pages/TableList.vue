@@ -275,7 +275,7 @@
                         <div class="detail-item"
                             v-if="selectedElement.link_type === 'Pipe' || selectedElement.link_type === 'Valve'">
                             <span class="detail-label">直径:</span>
-                            <span class="detail-value">{{ selectedElement.diameter || 0 }} mm</span>
+                            <span class="detail-value">{{ selectedElement.diameter || 0 }} m</span>
                         </div>
                         <div class="detail-item" v-if="selectedElement.link_type === 'Pipe'">
                             <span class="detail-label">粗糙度:</span>
