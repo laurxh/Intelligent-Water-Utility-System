@@ -110,8 +110,12 @@
 
             <!-- 节点 -->
             <circle v-for="(node, index) in networkData.nodes" :key="`node-${index}`" :cx="node.x" :cy="node.y"
-              :r="getNodeRadius(node.node_type)" :fill="getNodeColor(node.node_type)" stroke="#fff" stroke-width="1.5"
-              :class="`node ${node.node_type.toLowerCase()}`" @click.stop="openElementPopup(node)" />
+              :r="getNodeRadius(node.node_type) * (selectedSensorNodes.includes(node.id) ? 1.5 : 1)"
+              :fill="selectedSensorNodes.includes(node.id) ? '#ff9800' : getNodeColor(node.node_type)"
+              :stroke="selectedSensorNodes.includes(node.id) ? '#ff5722' : '#fff'"
+              :stroke-width="selectedSensorNodes.includes(node.id) ? 2.5 : 1.5"
+              :class="`node ${node.node_type.toLowerCase()} ${selectedSensorNodes.includes(node.id) ? 'selected-sensor' : ''}`"
+              @click.stop="openElementPopup(node)" />
 
             <!-- 节点标签 -->
             <text v-for="(node, index) in networkData.nodes" :key="`label-${index}`" :x="node.x + 12" :y="node.y + 4"
@@ -257,37 +261,40 @@
         <div class="element-popup-body" style="max-height: 70vh; overflow-y: auto;">
           <div v-if="planDetails">
             <h6>优化方案信息</h6>
-            <div class="plan-info">
-              <div class="detail-item">
-                <span class="detail-label">方案编号:</span>
-                <span class="detail-value">{{ planDetails.plan_id || '未指定' }}</span>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">监测率:</span>
-                <span class="detail-value">{{ (planDetails.coverage * 100).toFixed(2) }}%</span>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">观测点数量:</span>
-                <span class="detail-value">{{ planDetails.sensor_count || 0 }}</span>
-              </div>
+            <div style="height: 10px;"></div> <!-- 空白间隔元素 -->
+            <div class="plan-info-item" style="padding-left: 15px;">
+              <span class="label">观测点数量:</span>
+              <span class="value">{{ planDetails.sensor_count }}</span>
+            </div>
+            <!-- 添加最大距离显示 -->
+            <div class="plan-info-item" style="padding-left: 15px;">
+              <span class="label">最大距离:</span>
+              <span class="value">{{ planDetails.max_distance.toFixed(2) }} m</span>
             </div>
 
+            <!-- 布点方案可视化区域 - 这是专门的小窗容器 -->
+            <div class="plan-visualization-container">
+
+              <div id="plan-visualization-svg" class="visualization-container"></div>
+
+
+            </div>
+
+            <!-- 观测点列表 -->
             <h6 class="mt-4">观测点列表</h6>
             <table class="table table-striped table-sm">
               <thead>
                 <tr>
                   <th>序号</th>
                   <th>节点ID</th>
-                  <th>节点类型</th>
-                  <th>监测区域</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(sensor, index) in planDetails.sensors" :key="index">
+                <tr v-for="(nodeId, index) in (planDetails.sensorNodeIds ||
+                  (planDetails.sensors ? planDetails.sensors.map(s => typeof s === 'object' ? s.node_id : s) : []))"
+                  :key="index">
                   <td>{{ index + 1 }}</td>
-                  <td>{{ sensor.node_id }}</td>
-                  <td>{{ sensor.node_type }}</td>
-                  <td>{{ sensor.coverage_area ? sensor.coverage_area.join(', ') : '未指定' }}</td>
+                  <td>{{ nodeId }}</td>
                 </tr>
               </tbody>
             </table>
@@ -303,6 +310,7 @@
         </div>
       </div>
     </div>
+
     <div v-if="showCoveragePopup" class="element-popup-overlay" @click="closeCoveragePopup">
       <div class="element-popup" @click.stop style="width: 80%; max-width: 800px;">
         <div class="element-popup-header">
@@ -343,6 +351,28 @@
         </div>
       </div>
     </div>
+    <!-- 布点数输入弹窗 -->
+    <div v-if="showPointCountPopup" class="element-popup-overlay" @click="closePointCountPopup">
+      <div class="element-popup" @click.stop style="width: 400px;">
+        <div class="element-popup-header">
+          <h5>请输入布点数</h5>
+          <button class="close-btn" @click="closePointCountPopup">×</button>
+        </div>
+        <div class="element-popup-body">
+          <div class="form-group">
+            <label for="pointCount">布点数量 (1-{{ maxPointCount }})</label>
+            <input type="number" class="form-control" id="pointCount" v-model.number="pointCount" min="1"
+              :max="maxPointCount" placeholder="请输入布点数">
+            <small class="form-text text-muted">请输入大于0且不超过节点总数的整数</small>
+          </div>
+        </div>
+        <div class="element-popup-footer">
+          <button class="btn btn-secondary" @click="closePointCountPopup">取消</button>
+          <button class="btn btn-primary" @click="submitPointCount" :disabled="!isValidPointCount">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 底部分隔线 -->
     <hr class="mt-5 mb-4">
 
@@ -360,7 +390,13 @@
 <script>
 import axios from 'axios';
 import Chart from 'chart.js/auto'  // 使用新版本的导入方式
+
 export default {
+  computed: {
+    isValidPointCount() {
+      return this.pointCount > 0 && this.pointCount <= this.maxPointCount;
+    }
+  },
   data() {
     return {
       notificationVisible: false,
@@ -392,7 +428,10 @@ export default {
       coverageData: null,
       showCoveragePopup: false,
       coverageChartInstance: null,
-      
+      showPointCountPopup: false,
+      pointCount: 1,
+      maxPointCount: 0,
+      selectedSensorNodes: [], // 存储被选为传感器的节点ID
     };
   },
 
@@ -595,88 +634,539 @@ export default {
     // 生成方案
     async generatePlan() {
       if (!this.networkData) {
-        this.displayNotification('error', '请先导入INP文件');
+        this.showNotification('请先导入网络数据', 'error');
         return;
       }
 
-      try {
-        this.displayNotification('info', '正在生成方案...');
-
-        const response = await axios.post('http://localhost:5000/api/hydraulic/generate-plan');
-
-        if (response.data.success) {
-          this.displayNotification('success', '方案生成成功');
-
-          // 如果后端返回了方案数据，可以在这里处理
-          if (response.data.plan_data) {
-            // 处理方案数据，例如显示在弹窗中
-            this.showPlanDetails(response.data.plan_data);
-          }
-        } else {
-          this.displayNotification('error', '生成方案失败: ' + response.data.error);
-        }
-      } catch (error) {
-        console.error('生成方案出错:', error);
-        this.displayNotification('error', '生成方案出错: ' + (error.response?.data?.error || error.message));
-      }
-    },
-    updateNetworkWithCoverageData(coverageData) {
-      // 这里可以根据监测率数据更新网络图的显示
-      // 例如，可以改变节点的颜色或大小来表示监测率
-
-      // 示例实现：
-      if (this.networkData && this.networkData.nodes) {
-        this.networkData.nodes.forEach(node => {
-          // 如果监测率数据中包含该节点的信息
-          if (coverageData[node.id]) {
-            // 为节点添加监测率属性
-            node.coverage = coverageData[node.id];
-          }
-        });
-
-        // 重新渲染网络图
-        this.$forceUpdate();
-      }
+      // 显示布点数输入弹窗
+      this.maxPointCount = this.networkData.nodes.length; // 使用所有节点的总数
+      this.pointCount = Math.min(5, this.maxPointCount); // 默认设置为5或最大节点数
+      this.showPointCountPopup = true;
     },
 
-    // 显示方案详情
-    showPlanDetails(planData) {
-      // 创建一个新的弹窗来显示方案详情
+    // 关闭布点数输入弹窗
+    closePointCountPopup() {
+      this.showPointCountPopup = false;
+    },
+    openPlanPopup(planData) {
+      console.log('打开方案弹窗，数据:', planData);
       this.planDetails = planData;
       this.showPlanPopup = true;
+
+      // 使用nextTick确保DOM已经更新
+      this.$nextTick(() => {
+        // 增加延迟确保弹窗完全显示
+        setTimeout(() => {
+          console.log('准备渲染方案可视化，容器:', document.getElementById('plan-visualization-svg'));
+          this.renderPlanVisualization();
+        }, 300); // 增加延迟时间
+      });
     },
+
+    // 关闭方案详情弹窗
     closePlanPopup() {
       this.showPlanPopup = false;
     },
+    openPlanPopup(planData) {
+      this.planDetails = planData;
+      this.showPlanPopup = true;
 
+      // 使用nextTick确保DOM已经更新
+      this.$nextTick(() => {
+        this.renderPlanVisualization();
+      });
+    },
+    // 渲染布点方案可视化
+
+    // 添加图例到SVG中
+    // 修改 addLegendToSvg 方法，将图例位置调整得更靠上
+    addLegendToSvg(svg, width) {
+      // 将图例位置调整到更靠右上角，y坐标从20改为10
+      const legendGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      legendGroup.setAttribute("transform", `translate(${width - 100}, 10)`); // y坐标从20改为10
+
+      // 添加背景矩形
+      const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("x", 0);
+      bgRect.setAttribute("y", 0);
+      bgRect.setAttribute("width", 80);
+      bgRect.setAttribute("height", 45);
+      bgRect.setAttribute("fill", "white");
+      bgRect.setAttribute("fill-opacity", "0.8");
+      bgRect.setAttribute("rx", "3");
+      bgRect.setAttribute("ry", "3");
+      bgRect.setAttribute("stroke", "#ddd");
+      bgRect.setAttribute("stroke-width", "1");
+      legendGroup.appendChild(bgRect);
+
+      // 普通节点图例
+      const normalCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      normalCircle.setAttribute("cx", 10);
+      normalCircle.setAttribute("cy", 10);
+      normalCircle.setAttribute("r", 4);
+      normalCircle.setAttribute("fill", "#6CA6CD");
+      normalCircle.setAttribute("stroke", "#5F9EA0");
+      normalCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(normalCircle);
+
+      const normalText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      normalText.setAttribute("x", 20);
+      normalText.setAttribute("y", 14);
+      normalText.setAttribute("font-size", "10px");
+      normalText.setAttribute("fill", "#333");
+      normalText.textContent = "普通节点";
+      legendGroup.appendChild(normalText);
+
+      // 观测点图例
+      const sensorCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sensorCircle.setAttribute("cx", 10);
+      sensorCircle.setAttribute("cy", 30);
+      sensorCircle.setAttribute("r", 7);
+      sensorCircle.setAttribute("fill", "#FF6347");
+      sensorCircle.setAttribute("stroke", "#FF4500");
+      sensorCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(sensorCircle);
+
+      const sensorText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      sensorText.setAttribute("x", 20);
+      sensorText.setAttribute("y", 34);
+      sensorText.setAttribute("font-size", "10px");
+      sensorText.setAttribute("fill", "#333");
+      sensorText.textContent = "观测点";
+      legendGroup.appendChild(sensorText);
+
+      svg.appendChild(legendGroup);
+    },
+
+    // 添加图例到SVG中的方法
+    addLegendToSvg(svg, width) {
+      const legendGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      legendGroup.setAttribute("transform", `translate(${width - 100}, 20)`);
+
+      // 添加背景矩形
+      const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("x", 0);
+      bgRect.setAttribute("y", 0);
+      bgRect.setAttribute("width", 80);
+      bgRect.setAttribute("height", 45);
+      bgRect.setAttribute("fill", "white");
+      bgRect.setAttribute("fill-opacity", "0.8");
+      bgRect.setAttribute("rx", "3");
+      bgRect.setAttribute("ry", "3");
+      bgRect.setAttribute("stroke", "#ddd");
+      bgRect.setAttribute("stroke-width", "1");
+      legendGroup.appendChild(bgRect);
+
+      // 普通节点图例
+      const normalCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      normalCircle.setAttribute("cx", 10);
+      normalCircle.setAttribute("cy", 10);
+      normalCircle.setAttribute("r", 4);
+      normalCircle.setAttribute("fill", "#6CA6CD");
+      normalCircle.setAttribute("stroke", "#5F9EA0");
+      normalCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(normalCircle);
+
+      const normalText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      normalText.setAttribute("x", 20);
+      normalText.setAttribute("y", 14);
+      normalText.setAttribute("font-size", "10px");
+      normalText.setAttribute("fill", "#333");
+      normalText.textContent = "普通节点";
+      legendGroup.appendChild(normalText);
+
+      // 观测点图例
+      const sensorCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sensorCircle.setAttribute("cx", 10);
+      sensorCircle.setAttribute("cy", 30);
+      sensorCircle.setAttribute("r", 7);
+      sensorCircle.setAttribute("fill", "#FF6347");
+      sensorCircle.setAttribute("stroke", "#FF4500");
+      sensorCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(sensorCircle);
+
+      const sensorText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      sensorText.setAttribute("x", 20);
+      sensorText.setAttribute("y", 34);
+      sensorText.setAttribute("font-size", "10px");
+      sensorText.setAttribute("fill", "#333");
+      sensorText.textContent = "观测点";
+      legendGroup.appendChild(sensorText);
+
+      svg.appendChild(legendGroup);
+    },
+    // 添加图例到SVG中的新方法
+    addLegendToSvg(svg, width) {
+      const legendGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      legendGroup.setAttribute("transform", `translate(${width - 100}, 20)`);
+
+      // 添加背景矩形
+      const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("x", 0);
+      bgRect.setAttribute("y", 0);
+      bgRect.setAttribute("width", 80);
+      bgRect.setAttribute("height", 45);
+      bgRect.setAttribute("fill", "white");
+      bgRect.setAttribute("fill-opacity", "0.8");
+      bgRect.setAttribute("rx", "3");
+      bgRect.setAttribute("ry", "3");
+      bgRect.setAttribute("stroke", "#ddd");
+      bgRect.setAttribute("stroke-width", "1");
+      legendGroup.appendChild(bgRect);
+
+      // 普通节点图例
+      const normalCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      normalCircle.setAttribute("cx", 10);
+      normalCircle.setAttribute("cy", 10);
+      normalCircle.setAttribute("r", 4);
+      normalCircle.setAttribute("fill", "#6CA6CD");
+      normalCircle.setAttribute("stroke", "#5F9EA0");
+      normalCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(normalCircle);
+
+      const normalText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      normalText.setAttribute("x", 20);
+      normalText.setAttribute("y", 14);
+      normalText.setAttribute("font-size", "10px");
+      normalText.setAttribute("fill", "#333");
+      normalText.textContent = "普通节点";
+      legendGroup.appendChild(normalText);
+
+      // 观测点图例
+      const sensorCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sensorCircle.setAttribute("cx", 10);
+      sensorCircle.setAttribute("cy", 30);
+      sensorCircle.setAttribute("r", 7);
+      sensorCircle.setAttribute("fill", "#FF6347");
+      sensorCircle.setAttribute("stroke", "#FF4500");
+      sensorCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(sensorCircle);
+
+      const sensorText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      sensorText.setAttribute("x", 20);
+      sensorText.setAttribute("y", 34);
+      sensorText.setAttribute("font-size", "10px");
+      sensorText.setAttribute("fill", "#333");
+      sensorText.textContent = "观测点";
+      legendGroup.appendChild(sensorText);
+
+      svg.appendChild(legendGroup);
+    },
+    // 提交布点数并生成方案
+    // 提交布点数并生成方案
+    // 提交布点数并生成方案
+    // 提交布点数
+    // 提交布点数
+    submitPointCount() {
+      if (!this.isValidPointCount) return;
+
+      this.closePointCountPopup();
+      this.loadingNetwork = true;
+
+      axios.post('http://localhost:5000/api/hydraulic/generate-plan', {
+        network_data: this.networkData,
+        point_count: this.pointCount
+      })
+        .then(response => {
+          this.loadingNetwork = false;
+
+          if (response.data.success) {
+            // 获取方案数据
+            const planData = response.data.plan_data;
+
+            if (!planData || !planData.sensors) {
+              this.showNotification('方案数据格式不正确', 'error');
+              return;
+            }
+
+            // 提取传感器节点ID，但不更新全局的selectedSensorNodes
+            const sensorNodeIds = planData.sensors.map(sensor =>
+              typeof sensor === 'object' ? sensor.node_id : sensor
+            );
+
+            // 创建一个新的方案数据对象，包含传感器节点ID
+            const planWithSensors = {
+              ...planData,
+              sensorNodeIds: sensorNodeIds
+            };
+
+            // 打开方案详情弹窗，但不影响主画布
+            this.openPlanPopup(planWithSensors);
+            this.showNotification('方案生成成功', 'success');
+          } else {
+            this.showNotification('方案生成失败: ' + response.data.message, 'error');
+          }
+        })
+        .catch(error => {
+          this.loadingNetwork = false;
+          console.error('生成方案错误:', error);
+          this.showNotification('方案生成请求失败', 'error');
+        });
+    },
+    // 显示方案详情
+    showPlanDetails() {
+      this.isPlanDetailsVisible = true;
+
+      // 在弹窗显示后渲染可视化图
+      this.$nextTick(() => {
+        this.renderPlanVisualization();
+      });
+    },
+    renderPlanVisualization() {
+      console.log('开始渲染方案可视化');
+      // 获取容器
+      const container = document.getElementById('plan-visualization-svg');
+      if (!container) {
+        console.error('找不到可视化容器');
+        return;
+      }
+
+      // 清空容器
+      container.innerHTML = '';
+
+      // 设置SVG尺寸
+      const width = container.clientWidth || 600;
+      const height = 400;
+
+      // 确保容器高度设置正确
+      container.style.height = height + 'px';
+
+      // 创建SVG元素
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", width);
+      svg.setAttribute("height", height);
+      container.appendChild(svg);
+
+      // 检查数据
+      if (!this.planDetails || !this.networkData || !this.networkData.nodes) {
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", width / 2);
+        text.setAttribute("y", height / 2);
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = '暂无布点方案数据';
+        svg.appendChild(text);
+        return;
+      }
+
+      // 获取传感器节点ID列表
+      const sensorNodeIds = this.planDetails.sensorNodeIds ||
+        (this.planDetails.sensors ?
+          this.planDetails.sensors.map(s => typeof s === 'object' ? s.node_id : s) :
+          []);
+
+      console.log('传感器节点IDs:', sensorNodeIds);
+
+      // 深拷贝网络数据以避免修改原始数据
+      const nodes = JSON.parse(JSON.stringify(this.networkData.nodes));
+      const links = JSON.parse(JSON.stringify(this.networkData.links));
+
+      // 标记传感器节点
+      nodes.forEach(node => {
+        node.isSensor = sensorNodeIds.includes(node.id);
+      });
+
+      // 计算节点位置范围
+      const xValues = nodes.map(n => n.x);
+      const yValues = nodes.map(n => n.y);
+
+      const xMin = Math.min(...xValues);
+      const xMax = Math.max(...xValues);
+      const yMin = Math.min(...yValues);
+      const yMax = Math.max(...yValues);
+
+      // 计算缩放和平移参数，确保图形完全显示在SVG中并留有边距
+      const padding = 30;
+      const availableWidth = width - padding * 2;
+      const availableHeight = height - padding * 2;
+
+      const xScale = availableWidth / (xMax - xMin || 1);
+      const yScale = availableHeight / (yMax - yMin || 1);
+
+      // 取较小的缩放比例以保持图形比例
+      const scale = Math.min(xScale, yScale);
+
+      // 创建一个转换坐标的函数
+      const transformX = x => padding + (x - xMin) * scale;
+      const transformY = y => padding + (y - yMin) * scale;
+
+      // 先绘制连接线
+      links.forEach(link => {
+        const source = typeof link.source === 'string' ?
+          nodes.find(n => n.id === link.source) : link.source;
+        const target = typeof link.target === 'string' ?
+          nodes.find(n => n.id === link.target) : link.target;
+
+        if (source && target) {
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.setAttribute("x1", transformX(source.x));
+          line.setAttribute("y1", transformY(source.y));
+          line.setAttribute("x2", transformX(target.x));
+          line.setAttribute("y2", transformY(target.y));
+          line.setAttribute("stroke", "#999");
+          line.setAttribute("stroke-width", "1");
+          svg.appendChild(line);
+        }
+      });
+
+      // 绘制节点
+      nodes.forEach(node => {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", transformX(node.x));
+        circle.setAttribute("cy", transformY(node.y));
+        circle.setAttribute("r", node.isSensor ? "7" : "4");
+        circle.setAttribute("fill", node.isSensor ? "#FF6347" : "#6CA6CD");
+        circle.setAttribute("stroke", node.isSensor ? "#FF4500" : "#5F9EA0");
+        circle.setAttribute("stroke-width", "1.5");
+        svg.appendChild(circle);
+
+        // 只为观测点添加节点ID标签
+        if (node.isSensor) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", transformX(node.x) + 8);
+          text.setAttribute("y", transformY(node.y) + 3);
+          text.setAttribute("font-size", "8px");
+          text.setAttribute("fill", "#333");
+          text.textContent = node.id;
+          svg.appendChild(text);
+        }
+      });
+
+      // 在这里直接添加图例，而不是调用 addLegendToSvg 方法
+      // 将图例位置调整到更靠右上角，y坐标设为5
+      const legendGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      legendGroup.setAttribute("transform", `translate(${width - 100}, 5)`); // 将y坐标设为5，更靠上
+
+      // 添加背景矩形
+      const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("x", 0);
+      bgRect.setAttribute("y", 0);
+      bgRect.setAttribute("width", 80);
+      bgRect.setAttribute("height", 45);
+      bgRect.setAttribute("fill", "white");
+      bgRect.setAttribute("fill-opacity", "0.8");
+      bgRect.setAttribute("rx", "3");
+      bgRect.setAttribute("ry", "3");
+      bgRect.setAttribute("stroke", "#ddd");
+      bgRect.setAttribute("stroke-width", "1");
+      legendGroup.appendChild(bgRect);
+
+      // 普通节点图例
+      const normalCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      normalCircle.setAttribute("cx", 10);
+      normalCircle.setAttribute("cy", 10);
+      normalCircle.setAttribute("r", 4);
+      normalCircle.setAttribute("fill", "#6CA6CD");
+      normalCircle.setAttribute("stroke", "#5F9EA0");
+      normalCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(normalCircle);
+
+      const normalText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      normalText.setAttribute("x", 20);
+      normalText.setAttribute("y", 14);
+      normalText.setAttribute("font-size", "10px");
+      normalText.setAttribute("fill", "#333");
+      normalText.textContent = "普通节点";
+      legendGroup.appendChild(normalText);
+
+      // 观测点图例
+      const sensorCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sensorCircle.setAttribute("cx", 10);
+      sensorCircle.setAttribute("cy", 30);
+      sensorCircle.setAttribute("r", 7);
+      sensorCircle.setAttribute("fill", "#FF6347");
+      sensorCircle.setAttribute("stroke", "#FF4500");
+      sensorCircle.setAttribute("stroke-width", "1.5");
+      legendGroup.appendChild(sensorCircle);
+
+      const sensorText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      sensorText.setAttribute("x", 20);
+      sensorText.setAttribute("y", 34);
+      sensorText.setAttribute("font-size", "10px");
+      sensorText.setAttribute("fill", "#333");
+      sensorText.textContent = "观测点";
+      legendGroup.appendChild(sensorText);
+
+      svg.appendChild(legendGroup);
+
+      console.log('方案可视化渲染完成');
+    },
+    // 关闭方案弹窗
+    closePlanPopup() {
+      this.showPlanPopup = false;
+    },
     // 导出方案
     exportPlan() {
-      if (!this.planDetails) return;
-
-      try {
-        // 创建一个包含方案数据的Blob对象
-        const planJson = JSON.stringify(this.planDetails, null, 2);
-        const blob = new Blob([planJson], { type: 'application/json' });
-
-        // 创建下载链接
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `water_network_plan_${this.planDetails.plan_id || 'new'}.json`;
-        document.body.appendChild(a);
-        a.click();
-
-        // 清理
-        setTimeout(() => {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }, 0);
-
-        this.displayNotification('success', '方案已导出');
-      } catch (error) {
-        console.error('导出方案出错:', error);
-        this.displayNotification('error', '导出方案出错: ' + error.message);
+      if (!this.planDetails) {
+        this.displayNotification('error', '没有可导出的方案数据');
+        return;
       }
+
+      // 获取传感器节点ID列表
+      const sensorNodeIds = this.planDetails.sensorNodeIds ||
+        (this.planDetails.sensors ?
+          this.planDetails.sensors.map(s => typeof s === 'object' ? s.node_id : s) :
+          []);
+
+      if (sensorNodeIds.length === 0) {
+        this.displayNotification('error', '没有可导出的传感器节点数据');
+        return;
+      }
+
+      // 创建CSV内容
+      let csvContent = "序号,节点ID\n";
+
+      // 添加每行数据
+      sensorNodeIds.forEach((nodeId, index) => {
+        csvContent += `${index + 1},${nodeId}\n`;
+      });
+
+      // 创建Blob对象
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+      // 创建下载链接
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+
+      // 设置下载属性
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${this.planDetails.plan_id || 'plan'}.csv`);
+      link.style.visibility = 'hidden';
+
+      // 添加到文档并触发点击
+      document.body.appendChild(link);
+      link.click();
+
+      // 清理
+      document.body.removeChild(link);
+      this.displayNotification('success', '方案已导出为CSV文件');
+    },
+    // 高亮显示选中的传感器节点
+    highlightSelectedNodes() {
+      if (!this.$refs.networkSvg || !this.selectedSensorNodes.length) return;
+
+      // 首先重置所有节点的样式
+      d3.select(this.$refs.networkSvg)
+        .selectAll('.node')
+        .attr('r', d => d.size || 5)
+        .attr('fill', d => d.color || '#69b3a2');
+
+      // 高亮选中的节点
+      d3.select(this.$refs.networkSvg)
+        .selectAll('.node')
+        .filter(d => this.selectedSensorNodes.includes(d.id))
+        .attr('r', d => (d.size || 5) * 1.5)  // 放大1.5倍
+        .attr('fill', '#ff5733')  // 使用醒目的颜色
+        .attr('stroke', '#000')
+        .attr('stroke-width', 2);
+
+      // 添加动画效果（可选）
+      d3.select(this.$refs.networkSvg)
+        .selectAll('.node')
+        .filter(d => this.selectedSensorNodes.includes(d.id))
+        .transition()
+        .duration(300)
+        .attr('r', d => (d.size || 5) * 1.5)
+        .attr('fill', '#ff5733');
     },
     updateSvgSize() {
       if (this.$refs.networkContainer) {
@@ -1299,9 +1789,26 @@ export default {
   margin: 0;
 }
 
+.control-buttons .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  height: 40px;
+  min-width: 120px;
+}
+
+.control-buttons .btn i {
+  margin-right: 8px;
+  font-size: 16px;
+}
+
 .control-buttons {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
 .notification {
@@ -1563,11 +2070,6 @@ export default {
 .link:hover {
   stroke-width: 4px;
 }
-.control-buttons {
-  display: flex;
-  gap: 10px;
-}
-
 /* 方案信息样式 */
 .plan-info {
   background-color: #f8f9fa;
@@ -1624,5 +2126,201 @@ export default {
 
 .table-striped tbody tr:nth-of-type(odd) {
   background-color: rgba(0, 0, 0, 0.05);
+}
+.node.selected-sensor {
+  filter: drop-shadow(0 0 4px rgba(255, 152, 0, 0.8));
+  cursor: pointer;
+}
+
+/* 表单样式 */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #495057;
+  background-color: #fff;
+  background-clip: padding-box;
+  border: 1px solid #ced4da;
+  border-radius: 0.25rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.form-text {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+.visualization-container {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+.legend {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-left: 15px;
+}
+
+.legend-color {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+.plan-visualization-container {
+  margin: 15px 0;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f8f9fa;
+}
+
+#plan-visualization-svg {
+  width: 100%;
+  height: 400px;
+  background-color: white;
+  border-radius: 4px;
+  overflow: hidden;
+}
+/* 添加到<style>部分 */
+.plan-visualization-container {
+  margin: 20px 0;
+  padding: 15px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background-color: #f8f9fa;
+}
+
+.visualization-container {
+  width: 100%;
+  height: 400px;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+/* 确保弹窗样式正确 */
+.element-popup {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  max-width: 90%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1001;
+}
+
+.element-popup-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.visualization-container {
+  width: 100%;
+  height: 400px;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 15px;
+}
+
+.plan-info {
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.plan-info-item {
+  margin-bottom: 8px;
+}
+
+.plan-info-item .label {
+  font-weight: 500;
+  margin-right: 10px;
+  display: inline-block;
+  width: 100px;
+}
+
+.plan-visualization h6,
+.plan-info h6,
+.sensor-list h6 {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.visualization-container {
+  width: 100%;
+  height: 400px;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 15px;
+}
+
+.plan-info {
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.plan-info-item {
+  margin-bottom: 8px;
+}
+
+.plan-info-item .label {
+  font-weight: 500;
+  margin-right: 10px;
+  display: inline-block;
+  width: 100px;
+}
+
+.plan-visualization h6,
+.plan-info h6,
+.sensor-list h6 {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.visualization-container {
+  width: 100%;
+  height: 400px;
+  border: 1px solid #ddd;
+  margin-top: 15px;
+  margin-bottom: 15px;
+  overflow: hidden;
+}
+.plan-info-title {
+  margin-bottom: 20px;
+  /* 增加下方间距 */
+  font-weight: 600;
+}
+
+/* 为数值添加加粗样式 */
+.plan-info-value {
+  font-weight: bold;
 }
 </style>
