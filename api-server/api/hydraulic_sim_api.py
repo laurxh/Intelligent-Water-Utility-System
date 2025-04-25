@@ -4,7 +4,7 @@ import os
 import wntr
 import traceback
 from werkzeug.utils import secure_filename
-
+import time
 hydraulic_bp = Blueprint('hydraulic', __name__, url_prefix='/api/hydraulic')
 
 # 全局变量存储当前加载的INP文件路径
@@ -517,3 +517,167 @@ def calculate_coverage(nodes, G, exist):
                 max_node = node
         
         return max_dist
+@hydraulic_bp.route('/generate-plan', methods=['POST'])
+def generate_plan():
+    """根据指定的布点数生成监测方案"""
+    try:
+        # 获取请求中的布点数和网络数据
+        data = request.get_json()
+        point_count = data.get('point_count', 0)
+        network_data = data.get('network_data', None)  # 获取前端传来的网络数据
+        
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        networks_dir = os.path.join(BASE_DIR, 'Water-Hydraulic-Simulation', 'networks')
+        inp_files = [f for f in os.listdir(networks_dir) if f.endswith('.inp')]
+
+        if not inp_files:
+            raise FileNotFoundError(f"在 {networks_dir} 目录下没有找到.inp文件")
+
+        # 使用找到的第一个.inp文件
+        inp_file_name = inp_files[0]
+        inp_file_path = os.path.join(networks_dir, inp_file_name)
+
+        # 加载水力网络模型
+        wn = wntr.network.WaterNetworkModel(inp_file_path)
+        
+        # 获取所有节点
+        nodes = []
+        node_coords = {}  # 存储节点坐标
+        for node_id, node in wn.nodes():
+            nodes.append(node_id)
+            # 保存节点坐标
+            node_coords[node_id] = list(node.coordinates) if node.coordinates else [0, 0]
+        
+        # 验证布点数是否有效
+        if point_count <= 0 or point_count > len(nodes):
+            return jsonify({
+                "success": False,
+                "error": f"布点数必须大于0且不超过节点总数({len(nodes)})"
+            }), 400
+            
+        # 构建图结构
+        G = {node: [] for node in nodes}
+        links_data = []  # 存储连接信息
+        for link_id, link in wn.links():
+            start_node = link.start_node_name
+            end_node = link.end_node_name
+            weight = link.length if hasattr(link, 'length') and link.length else 1
+            
+            # 添加双向边
+            G[start_node].append((end_node, weight))
+            G[end_node].append((start_node, weight))
+            
+            # 保存连接信息
+            links_data.append({
+                'id': link_id,
+                'source': start_node,
+                'target': end_node
+            })
+        
+        # 初始化已选择的点
+        exist = {node: False for node in nodes}
+        selected_nodes = []
+        
+        # 选择第一个点
+        start_node = nodes[0]
+        exist[start_node] = True
+        selected_nodes.append(start_node)
+        
+        # 迭代选择剩余的点
+        for i in range(1, point_count):
+            next_node = work(nodes, G, exist)
+            if next_node:
+                exist[next_node] = True
+                selected_nodes.append(next_node)
+        
+        # 计算覆盖率
+        max_distance = calculate_coverage(nodes, G, exist)
+        
+        # 构建方案数据
+        plan_data = {
+            "plan_id": f"plan_{point_count}_{int(time.time())}",
+            'max_distance': max_distance,  # 最远距离，单位：m
+            "sensor_count": len(selected_nodes),
+            "sensors": selected_nodes,  # 简化为直接返回节点ID列表
+            "detailed_sensors": []
+        }
+        
+        # 添加传感器详细信息
+        for node_id in selected_nodes:
+            node_type = wn.get_node(node_id).node_type
+            # 计算每个传感器覆盖的区域（这里简化为与该节点直接相连的节点）
+            coverage_area = [neighbor for neighbor, _ in G[node_id]]
+            
+            sensor_data = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "coverage_area": coverage_area
+            }
+            plan_data["detailed_sensors"].append(sensor_data)
+        
+        # 添加网络拓扑数据，用于在弹窗中绘制
+        nodes_data = []
+        for node_id in nodes:
+            # 从前端传来的数据中获取坐标，如果没有则使用后端计算的坐标
+            x, y = node_coords[node_id]
+            
+            # 如果前端传来了网络数据，优先使用前端的坐标
+            if network_data and 'nodes' in network_data:
+                for node in network_data['nodes']:
+                    if node['id'] == node_id and 'x' in node and 'y' in node:
+                        x, y = node['x'], node['y']
+                        break
+            
+            nodes_data.append({
+                'id': node_id,
+                'x': x,
+                'y': y,
+                'isSensor': node_id in selected_nodes
+            })
+        
+        # 添加网络拓扑数据到返回结果
+        plan_data["network_topology"] = {
+            "nodes": nodes_data,
+            "links": links_data
+        }
+        
+        return jsonify({
+            "success": True,
+            "message": "方案生成成功",
+            "plan_data": plan_data
+        })
+        
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+def shortest_path_distance(G, start, end):
+    """使用Dijkstra算法计算两点间的最短路径距离"""
+    dist = {node: float('inf') for node in G}
+    dist[start] = 0
+    pq = [(0, start)]
+    visited = set()
+    
+    while pq:
+        d, node = heapq.heappop(pq)
+        
+        if node in visited:
+            continue
+            
+        visited.add(node)
+        
+        if node == end:
+            return d
+            
+        for neighbor, weight in G[node]:
+            if neighbor not in visited:
+                new_dist = d + weight
+                if new_dist < dist[neighbor]:
+                    dist[neighbor] = new_dist
+                    heapq.heappush(pq, (new_dist, neighbor))
+    
+    return float('inf')
