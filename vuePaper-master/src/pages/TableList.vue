@@ -461,10 +461,16 @@ export default {
     },
     computed: {
         waterPlantNodes() {
-            return this.networkData.nodes.filter(node =>
-                node.is_water_plant &&
-                (node.actual_demand !== undefined || node.base_demand !== undefined)
-            ).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+            if (!this.networkData || !this.networkData.nodes) return [];
+
+            // 获取所有符合条件的水厂节点和 ID 为 26 的节点
+            const nodes = this.networkData.nodes.filter(node =>
+                (node.is_water_plant && (node.actual_demand !== undefined || node.base_demand !== undefined)) ||
+                node.id === '26'
+            );
+            console.log(nodes)
+            // 按 ID 排序
+            return nodes.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
         }
     },
     methods: {
@@ -480,12 +486,55 @@ export default {
                 this.displayNotification('info', '正在导出水厂需水量数据...', 5000);
 
                 // 根据is_water_plant属性筛选水厂节点
-                const waterPlantData = this.scheduledData.nodes
+                let waterPlantData = this.scheduledData.nodes
                     .filter(node => node.is_water_plant === true)
-                    .map(node => ({
-                        id: node.id,
-                        demand: node.actual_demand !== undefined ? node.actual_demand : node.base_demand
-                    }));
+                    .map(node => {
+                        // 优先级：actual_demand > base_demand > inflow
+                        let demand;
+                        if (node.actual_demand !== undefined) {
+                            demand = node.actual_demand;
+                        } else if (node.base_demand !== undefined) {
+                            demand = node.base_demand;
+                        } else if (node.inflow !== undefined) {
+                            demand = node.inflow;
+                        } else {
+                            demand = 0; // 默认值为0
+                        }
+
+                        return {
+                            id: node.id,
+                            demand: demand
+                        };
+                    });
+
+                // 特殊处理：添加节点26（即使它的is_water_plant为false）
+                const node26 = this.scheduledData.nodes.find(node => node.id === '26');
+                if (node26) {
+                    let demand26;
+                    if (node26.actual_demand !== undefined) {
+                        demand26 = node26.actual_demand;
+                    } else if (node26.base_demand !== undefined) {
+                        demand26 = node26.base_demand;
+                    } else if (node26.inflow !== undefined) {
+                        demand26 = node26.inflow;
+                    } else {
+                        demand26 = 0;
+                    }
+
+                    // 检查节点26是否已经在列表中（避免重复）
+                    const exists = waterPlantData.some(node => node.id === '26');
+                    if (!exists) {
+                        waterPlantData.push({
+                            id: '26',
+                            demand: demand26
+                        });
+                    }
+                }
+
+                // 按ID排序
+                waterPlantData = waterPlantData.sort((a, b) =>
+                    a.id.localeCompare(b.id, undefined, { numeric: true })
+                );
 
                 // 检查是否有水厂数据
                 if (waterPlantData.length === 0) {
@@ -529,11 +578,23 @@ export default {
         },
     
         formatDemand(node) {
-            const demand = node.actual_demand !== undefined ? node.actual_demand : node.base_demand;
-            // 格式化数值，保留四位小数
-            const formattedDemand = Number(demand).toFixed(10);
-            const unit = 'm³/s';
-            return `${formattedDemand} ${unit}`;
+            // 优先使用 actual_demand，其次使用 base_demand，最后使用 inflow
+            let demand;
+            if (node.actual_demand !== undefined) {
+                demand = node.actual_demand;
+            } else if (node.base_demand !== undefined) {
+                demand = node.base_demand;
+            } else if (node.inflow !== undefined) {
+                demand = node.inflow;
+            }
+
+            // 检查值是否为 NaN 或 undefined
+            if (demand === undefined || isNaN(demand)) {
+                return '0.0000000000 m³/s';
+            }
+
+            // 格式化数值，保留10位小数
+            return `${demand.toFixed(10)} m³/s`;
         },
         getNodeColor(nodeType) {
             const colorMap = {
