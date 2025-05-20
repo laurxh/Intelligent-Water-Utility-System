@@ -199,17 +199,18 @@ def export_network_data(after_simulation=False, hour=0):
             node_data['level'] = node.level
             node_data['max_level'] = node.max_level
             node_data['min_level'] = node.min_level
-            
+            print("dsad",node_data['level'])
             # 如果是模拟后的数据，添加当前水位信息和流量信息
             if after_simulation and results is not None:
                 try:
                     # 获取指定时间步的水位数据
-                    current_level = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
-                    node_data['current_level'] = round(float(current_level), 2)
-                    
+                    #current_level = results.node['level'].loc[results.node['level'].index[time_step_index], node_id]
+                    #node_data['current_level'] = round(float(current_level), 10)
+                    #print("dsad",node_data['current_level'])
                     # 获取水箱的流入/流出量
                     demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['inflow'] = round(float(demand), 10)  # 水箱流入为负需水量
+                    print(demand)
                 except Exception as e:
                     print(f"获取水箱 {node_id} 水位/流量数据时出错: {str(e)}")
                     node_data['current_level'] = None
@@ -232,7 +233,7 @@ def export_network_data(after_simulation=False, hour=0):
             link_data['length'] = link.length
             link_data['diameter'] = link.diameter
             link_data['roughness'] = link.roughness
-            
+            print(link.diameter)
             # 如果是模拟后的数据，添加流量信息
             if after_simulation and results is not None:
                 try:
