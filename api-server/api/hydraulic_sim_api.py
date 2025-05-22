@@ -250,8 +250,8 @@ def export_network_data(after_simulation=False, hour=0):
             if after_simulation and results is not None:
                 try:
                     # 水库的压力头
-                    head = results.node['head'].loc[results.node['head'].index[time_step_index], node_id]
-                    node_data['current_head'] = round(float(head), 2)
+                    pressure = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
+                    node_data['pressure'] = round(float(pressure), 10)  # 保留两位小数
                     # 水库的出水量
                     demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['outflow'] = round(float(demand), 10)  # 水库出水为负需水量
@@ -268,6 +268,9 @@ def export_network_data(after_simulation=False, hour=0):
             if after_simulation and results is not None:
                 try:
                     # 获取指定时间步的水位数据
+                    pressure = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
+                    node_data['pressure'] = round(float(pressure), 10)  # 保留两位小数
+                    node_data['pressure_unit'] = 'm'  # 单位为米
                     current_level = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
                     node_data['current_level'] = round(float(current_level), 2)
                     
