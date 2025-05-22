@@ -27,7 +27,6 @@
             <span>{{ notificationMessage }}</span>
             <button class="close-btn" @click="closeNotification">×</button>
         </div>
-
         <!-- 网络拓扑图容器 -->
         <div class="network-container">
             <div class="network-controls">
@@ -183,6 +182,12 @@
             </div>
         </div>
         <!-- 元素详情弹窗 -->
+        <div v-if="importMessage" :class="['import-message', importMessageType]">
+            {{ importMessage }}
+            <ul v-if="importErrors.length > 0" class="error-list">
+                <li v-for="(error, index) in importErrors" :key="index">{{ error }}</li>
+            </ul>
+        </div>
         <div v-if="showElementPopup" class="element-popup-overlay" @click="closeElementPopup">
             <div class="element-popup" @click.stop>
                 <div class="element-popup-header">
@@ -249,6 +254,12 @@
                         <div class="detail-item" v-if="selectedElement.node_type === 'Tank'">
                             <span class="detail-label">最小水位:</span>
                             <span class="detail-value">{{ selectedElement.min_level || 0 }} m</span>
+                        </div>
+                        <div class="detail-item"
+                            v-if="selectedElement.node_type === 'Tank' && selectedElement.pressure !== undefined">
+                            <span class="detail-label">压力:</span>
+                            <span class="detail-value">{{ selectedElement.pressure }} {{ selectedElement.pressure_unit
+                                || 'm' }}</span>
                         </div>
                         <div class="detail-item"
                             v-if="selectedElement.node_type === 'Tank' && selectedElement.inflow !== undefined">
@@ -410,6 +421,7 @@ export default {
             showUpdateDemandModal: false,
             isUpdatingDemand: false,
             updateDemandError: null,
+            notificationTimeout: null,
             updateDemandForm: {
                 nodeId: '',
                 demand: null
@@ -421,6 +433,9 @@ export default {
             showHeatmapModal: false,
             heatmapImageUrl: '',
             loadingHeatmap: false,
+            importMessage: '',
+            importMessageType: 'success',
+            importErrors: [],
         };
     },
 
@@ -474,7 +489,7 @@ export default {
         }
     },
     methods: {
-        
+
         exportWaterPlantData() {
             if (!this.scheduledData || !this.scheduledData.nodes || this.scheduledData.nodes.length === 0) {
                 this.displayNotification('error', '没有可导出的水厂数据', 5000);
@@ -576,7 +591,7 @@ export default {
                 this.displayNotification('error', '导出出错: ' + error.message, 8000);
             }
         },
-    
+
         formatDemand(node) {
             // 优先使用 actual_demand，其次使用 base_demand，最后使用 inflow
             let demand;
@@ -1022,26 +1037,53 @@ export default {
             this.showNotification('模拟数据已更新', 'success');
         },
         showNotification(message, type = 'info') {
+            // 先清除任何现有的定时器
+            if (this.notificationTimeout) {
+                clearTimeout(this.notificationTimeout);
+                this.notificationTimeout = null;
+            }
+
+            // 设置通知内容和可见性
             this.notificationMessage = message;
             this.notificationType = type;
+            this.notificationVisible = true;
 
+            // 根据通知类型设置图标和自动关闭行为
             switch (type) {
                 case 'success':
                     this.notificationIcon = 'ti-check-circle';
+                    // 成功通知5秒后自动关闭
+                    this.notificationTimeout = setTimeout(() => {
+                        this.closeNotification();
+                    }, 5000);
                     break;
                 case 'error':
                     this.notificationIcon = 'ti-alert-circle';
+                    // 错误通知不设置自动关闭定时器
                     break;
-                default:
+                case 'warning':
+                    this.notificationIcon = 'ti-alert-triangle';
+                    // 警告通知5秒后自动关闭
+                    this.notificationTimeout = setTimeout(() => {
+                        this.closeNotification();
+                    }, 5000);
+                    break;
+                default: // info
                     this.notificationIcon = 'ti-info-circle';
+                    // 默认通知5秒后自动关闭
+                    this.notificationTimeout = setTimeout(() => {
+                        this.closeNotification();
+                    }, 5000);
             }
 
-            this.notificationVisible = true;
-
-            // 5秒后自动关闭通知
-            setTimeout(() => {
-                this.closeNotification();
-            }, 5000);
+            // 确保错误通知显示在视口中（可选）
+            if (type === 'error') {
+                // 如果有通知容器，确保它可见
+                const notificationEl = document.querySelector('.notification-container');
+                if (notificationEl) {
+                    notificationEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
         },
         // 运行模拟
         async runSimulation() {
@@ -1144,7 +1186,7 @@ export default {
                     this.scale = currentScale;
 
                     this.showNotification('随机需水量生成成功', 'success');
-                     this.hasRunSchedule=false;
+                    this.hasRunSchedule = false;
                 } else {
                     this.showNotification(`生成失败: ${response.data.error}`, 'error');
                 }
@@ -1175,6 +1217,7 @@ export default {
         async importDemands() {
             if (!this.selectedFile) {
                 this.importError = "请先选择文件";
+                this.showNotification("请先选择文件", 'error');
                 return;
             }
 
@@ -1187,12 +1230,15 @@ export default {
 
                 // 使用正确的API路径
                 const response = await axios.post('http://localhost:5000/api/scheduler/network/import-demands', formData);
+                console.log("导入响应:", response.data);
 
+                // 检查响应中是否包含错误信息
                 if (response.data.success) {
                     // 更新网络数据
                     const updatedData = response.data.data;
+                    this.importErrors = response.data.errors || [];
 
-                    // 处理节点坐标，类似于updateDemand方法
+                    // 处理节点坐标
                     if (updatedData && updatedData.nodes) {
                         updatedData.nodes = updatedData.nodes.map(node => {
                             // 保留原有的水厂标记
@@ -1231,14 +1277,42 @@ export default {
                     this.scale = currentScale;
 
                     this.closeImportModal();
-                    this.showNotification('成功导入需水量数据', 'success');
+
+                    if (this.importErrors && this.importErrors.length > 0) {
+                        console.log("导入有错误:", this.importErrors);
+                        const errorMessage = `部分数据导入成功，但存在以下错误:\n${this.importErrors.join('\n')}`;
+
+                        // 1. 设置一个标志，表示这是警告通知
+                        this.isErrorNotification = true;  // 您可能想将变量名改为isWarningNotification，但这取决于您的逻辑
+
+                        // 2. 显示通知，将类型从'error'改为'warning'
+                        this.showNotification(errorMessage, 'warning');
+
+                        // 3. 清除自动关闭的定时器
+                        if (this.notificationTimeout) {
+                            clearTimeout(this.notificationTimeout);
+                            this.notificationTimeout = null;
+                        }
+                    }
+                    else {
+                        // 正常的成功通知
+                        this.isErrorNotification = false;
+                        this.showNotification('成功导入需水量数据', 'success');
+                    }
+
                     this.hasRunSchedule = false;
                     // 重新渲染网络图
                     this.$nextTick(() => {
                         this.renderNetwork();
                     });
                 } else {
-                    this.importError = response.data.error || "导入失败";
+                    // 导入失败的情况
+                    const errorMessage = response.data.error || response.data.message || "导入失败";
+                    console.log("导入失败:", errorMessage);
+
+                    this.showNotification(errorMessage, 'error');
+                    // 清除自动关闭的定时器，让错误通知持续显示
+                    clearTimeout(this.notificationTimeout);
                 }
             } catch (error) {
                 console.error("导入需水量数据出错:", error);
@@ -1246,7 +1320,28 @@ export default {
                     console.error("错误状态码:", error.response.status);
                     console.error("错误数据:", error.response.data);
                 }
-                this.importError = error.response?.data?.error || error.message || "导入过程中发生错误";
+                this.closeImportModal();
+
+                // 获取详细的错误信息
+                let errorMessage = "导入过程中发生错误";
+                if (error.response && error.response.data) {
+                    if (error.response.data.error) {
+                        errorMessage = error.response.data.error;
+                    } else if (error.response.data.message) {
+                        errorMessage = error.response.data.message;
+                    } else if (typeof error.response.data === 'string') {
+                        errorMessage = error.response.data;
+                    }
+                } else if (error.message) {
+                    errorMessage = error.message;
+                }
+
+                this.importError = errorMessage;
+                console.log("显示错误通知:", errorMessage);
+
+                this.showNotification(errorMessage, 'error');
+                // 清除自动关闭的定时器，让错误通知持续显示
+                clearTimeout(this.notificationTimeout);
             } finally {
                 this.isImporting = false;
             }
@@ -1427,7 +1522,7 @@ export default {
 
                     this.closeUpdateDemandModal();
                     this.showNotification(`成功更新节点 ${this.updateDemandForm.nodeId} 的需水量`, 'success');
-                    this.hasRunSchedule=false;
+                    this.hasRunSchedule = false;
                 } else {
                     this.updateDemandError = response.data.error;
                 }
@@ -1780,6 +1875,7 @@ export default {
 .close-btn:hover {
     color: #343a40;
 }
+
 /* 在现有的 <style> 标签内添加 */
 .form-group {
     margin-bottom: 15px;
@@ -1823,6 +1919,7 @@ export default {
 .mt-3 {
     margin-top: 15px;
 }
+
 .file-input-container {
     margin-top: 8px;
 }
@@ -1842,6 +1939,7 @@ export default {
 .file-input-box:hover {
     border-color: #999;
 }
+
 /* 在<style>部分修改水厂的样式 */
 /* 在<style>部分修改水厂的样式 */
 .water-plant {
@@ -1854,9 +1952,11 @@ export default {
 .legend-color.water-plant {
     background-color: #d300b7;
 }
+
 .demand-label {
     filter: drop-shadow(0px 0px 2px white);
 }
+
 .demand-box {
     filter: drop-shadow(0px 1px 3px rgba(0, 0, 0, 0.2));
     pointer-events: none;
@@ -1867,6 +1967,7 @@ export default {
     pointer-events: none;
     /* 确保文本不会阻止点击事件 */
 }
+
 .network-water-plants {
     position: absolute;
     top: 10px;
@@ -1910,6 +2011,7 @@ export default {
 .water-plant-demand {
     /* 不需要单独设置颜色，继承父元素颜色 */
 }
+
 .export-buttons {
     position: absolute;
     bottom: 20px;
@@ -1925,6 +2027,7 @@ export default {
     text-align: left;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
 }
+
 .loading-overlay {
     position: fixed;
     top: 0;
@@ -2000,6 +2103,7 @@ export default {
     max-width: 100%;
     max-height: 70vh;
 }
+
 .heatmap-modal {
     display: block;
     position: fixed;
@@ -2086,5 +2190,33 @@ export default {
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 10;
+}
+.import-message {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.success {
+    background-color: #f0f9eb;
+    color: #67c23a;
+    border: 1px solid #e1f3d8;
+}
+
+.warning {
+    background-color: #fdf6ec;
+    color: #e6a23c;
+    border: 1px solid #faecd8;
+}
+
+.error {
+    background-color: #fef0f0;
+    color: #f56c6c;
+    border: 1px solid #fde2e2;
+}
+
+.error-list {
+    margin-top: 5px;
+    padding-left: 20px;
 }
 </style>
