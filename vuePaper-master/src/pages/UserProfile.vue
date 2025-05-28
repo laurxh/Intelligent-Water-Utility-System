@@ -4,7 +4,12 @@
     <!-- 保留原有的上传部分 -->
     <div class="header-container">
       <h4 class="title">数据导入</h4>
-      <div class="import-button">
+
+      <div class="buttons-container">
+        <button class="btn btn-success btn-sm" @click="generateChart">
+          <i class="ti-bar-chart"></i> 生成图表
+        </button>
+
         <label for="csv-upload" class="btn btn-primary btn-sm">
           <i class="ti-import"></i> 导入CSV
         </label>
@@ -12,6 +17,8 @@
           ref="fileInput" />
       </div>
     </div>
+
+
 
     <!-- 成功通知提示 -->
     <div v-if="showNotification" :class="['notification', notificationType]">
@@ -98,6 +105,25 @@
         </div>
       </div>
     </div>
+    <!-- 图表预览模态框 -->
+    <div v-if="showChartPreview" class="file-preview-modal">
+      <div class="file-preview-content">
+        <div class="file-preview-header">
+          <h5>需水量图表</h5>
+          <button class="close-btn" @click="closeChartPreview">×</button>
+        </div>
+        <div class="file-preview-body">
+          <div v-if="loadingChart" class="text-center py-3">
+            <div class="spinner-border text-primary" role="status">
+              <span class="sr-only">加载中...</span>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="dataConsumptionChart" ref="dataConsumptionChart" height="400"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 底部分隔线 -->
     <hr class="mt-5 mb-4">
@@ -144,33 +170,210 @@ export default {
       forecastStatus: '',
       forecastStatusType: 'text-info',
       forecastStatusIcon: 'ti-info-circle',
-      predictionResult: null
+      predictionResult: null,
+      showChartPreview: false,
+      loadingChart: false,
+      dataConsumptionChart: null
     }
   },
 
   methods: {
-   handleFileUpload(event) {
+    generateChart() {
+      if (!this.uploadedFile) {
+        this.showErrorNotification('请先上传CSV文件');
+        return;
+      }
+
+      this.showChartPreview = true;
+      this.loadingChart = true;
+
+      // 直接使用已经解析好的数据创建图表
+      if (this.fileRows.length === 0) {
+        this.showErrorNotification('没有可用的数据，请重新上传文件');
+        this.loadingChart = false;
+        this.showChartPreview = false;
+        return;
+      }
+
+      console.log(this.fileRows);
+
+      // 使用 nextTick 确保 DOM 已更新
+      this.$nextTick(() => {
+        // 延迟一点时间确保模态框已完全显示
+        setTimeout(() => {
+          this.createConsumptionChart();
+        }, 300);
+      });
+    },
+
+
+    // 创建需水量图表
+    createConsumptionChart() {
+      try {
+        console.log("开始创建图表...");
+
+        // 获取日期和需水量数据
+        const dateField = this.fileHeaders[0]; // 假设第一列是日期
+        const consumptionField = this.fileHeaders[1]; // 假设第二列是需水量
+
+        console.log("使用的日期字段:", dateField);
+        console.log("使用的需水量字段:", consumptionField);
+
+        // 将Vue响应式对象转换为普通JavaScript对象
+        const plainData = JSON.parse(JSON.stringify(this.fileRows));
+        console.log("转换后的数据示例:", plainData[0]);
+
+        // 过滤掉日期为空的数据
+        const filteredData = plainData.filter(row => {
+          return row[dateField] && row[dateField].trim() !== "";
+        });
+
+        console.log("过滤前数据条数:", plainData.length);
+        console.log("过滤后数据条数:", filteredData.length);
+
+        // 准备图表数据
+        const dates = filteredData.map(row => row[dateField]);
+        const consumption = filteredData.map(row => parseFloat(row[consumptionField]) || 0);
+
+        // 获取canvas元素
+        const canvas = this.$refs.dataConsumptionChart;
+        if (!canvas) {
+          console.error("找不到canvas元素");
+          this.showErrorNotification("找不到图表容器");
+          this.loadingChart = false;
+          return;
+        }
+
+        // 获取2D上下文
+        const ctx = canvas.getContext('2d');
+
+        // 销毁旧图表
+        if (this.dataConsumptionChart) {
+          this.dataConsumptionChart.destroy();
+        }
+
+        // 创建新图表
+        this.dataConsumptionChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: dates,
+            datasets: [{
+              label: '需水量',
+              data: consumption,
+              borderColor: 'rgb(20, 180, 170)',
+              backgroundColor: 'rgba(20, 180, 170, 0.2)',
+              borderWidth: 2.5,
+              fill: true,
+
+              // 关键参数：增加曲线平滑度
+              tension: 0.4,  // 值范围0-1，越大曲线越平滑
+
+              // 减小或隐藏数据点
+              pointRadius: 0,  // 设为0完全隐藏数据点
+              pointHoverRadius: 4,  // 鼠标悬停时显示点
+
+              // 可选：使线条看起来更平滑
+              borderJoinStyle: 'round',
+
+              // 可选：如果想要更平滑的填充区域
+              segment: {
+                borderColor: ctx => 'rgb(20, 180, 170)'
+              }
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+
+            // 添加标题配置，使"需水量"居中显示
+            plugins: {
+              title: {
+                display: true,
+                align: 'center',
+                position: 'top',
+                font: {
+                  size: 16,
+                  weight: 'bold'
+                },
+                padding: {
+                  top: 10,
+                  bottom: 10
+                }
+              },
+              // 如果您想保留图例但让其居中
+              legend: {
+                display: true,
+                position: 'top',
+                align: 'center'
+              }
+            },
+
+            elements: {
+              line: {
+                tension: 0.4  // 全局设置线条平滑度
+              }
+            }
+          }
+        });
+
+        this.loadingChart = false;
+      } catch (error) {
+        console.error("创建图表时出错:", error);
+        this.showErrorNotification("创建图表时出错: " + error.message);
+        this.loadingChart = false;
+      }
+    },
+    // 关闭图表预览
+    closeChartPreview() {
+      this.showChartPreview = false;
+    },
+    handleFileUpload(event) {
       const file = event.target.files[0];
       if (!file) return;
-      
+
       if (!file.name.endsWith('.csv')) {
         this.showErrorNotification('请上传CSV格式的文件');
         this.$refs.fileInput.value = '';
         return;
       }
-      
-      this.uploadCSVFile(file);
+
+      // 在上传前先解析CSV文件
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        // 使用Papa Parse解析CSV数据
+        Papa.parse(e.target.result, {
+          header: true,
+          complete: (results) => {
+            // 保存解析结果到前端
+            this.fileHeaders = results.meta.fields;
+            this.fileRows = results.data;
+            console.log("前端解析的CSV数据:", this.fileHeaders, this.fileRows[0]);
+
+            // 然后再上传到服务器
+            this.uploadCSVFile(file);
+          },
+          error: (error) => {
+            this.showErrorNotification(`解析CSV文件失败: ${error.message}`);
+            this.$refs.fileInput.value = '';
+          }
+        });
+      };
+      reader.onerror = () => {
+        this.showErrorNotification('读取文件失败');
+        this.$refs.fileInput.value = '';
+      };
+      reader.readAsText(file);
     },
-    
+
     async uploadCSVFile(file) {
       try {
         this.uploading = true;
         this.uploadProgress = 0;
-        
+
         const formData = new FormData();
         formData.append('file', file);
         formData.append('module_type', 'water_forecast'); // 指定模块类型
-        
+
         const response = await axios.post('http://localhost:5000/api/files/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
@@ -179,7 +382,7 @@ export default {
             this.uploadProgress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           }
         });
-        
+
         if (response.data.success) {
           this.showSuccessNotification('CSV文件上传成功！');
           // 保存上传的文件信息
@@ -537,6 +740,8 @@ export default {
   margin-bottom: 16px;
   border-radius: 4px;
   animation: slide-in 0.3s ease-out;
+  pointer-events: none;
+  /* 允许点击通知下方的元素 */
 }
 
 .success {
@@ -747,5 +952,86 @@ export default {
     transform: translateY(0);
     opacity: 1;
   }
+}
+
+.chart-button-container {
+  margin: 15px 0;
+}
+
+.generate-chart-btn {
+  padding: 8px 16px;
+  font-size: 15px;
+}
+
+.chart-container {
+  width: 100%;
+  height: 500px;
+}
+
+.header-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.buttons-container {
+  display: flex;
+  gap: 10px;
+  /* 按钮之间的间距 */
+}
+
+.title {
+  margin-right: auto;
+  /* 标题靠左 */
+}
+.header-container {
+  margin-bottom: 15px;
+}
+
+.title {
+  margin-bottom: 10px;
+}
+
+.buttons-container {
+  display: flex;
+  gap: 12px;
+  /* 按钮之间的间距 */
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  /* 增加内边距使按钮更大 */
+  font-size: 15px;
+  /* 稍微增加字体大小 */
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  min-width: 120px;
+  /* 增加宽度 */
+  height: 40px;
+  /* 增加高度 */
+  transition: all 0.2s;
+}
+
+.btn i {
+  margin-right: 6px;
+}
+
+.btn-success {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.btn-secondary {
+  background-color: #6c757d;
+  color: white;
+}
+
+/* 悬停效果 */
+.btn:hover {
+  opacity: 0.9;
 }
 </style>
