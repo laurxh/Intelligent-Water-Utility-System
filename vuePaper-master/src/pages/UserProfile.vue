@@ -24,7 +24,6 @@
     <div v-if="showNotification" :class="['notification', notificationType]">
       <i :class="notificationIcon"></i>
       <span>{{ notificationMessage }}</span>
-      <button class="close-btn" @click="closeNotification">×</button>
     </div>
 
     <!-- 上传进度条 -->
@@ -128,14 +127,37 @@
     <!-- 底部分隔线 -->
     <hr class="mt-5 mb-4">
 
-    <!-- 预测水量按钮 - 放在最底部 -->
-    <div class="forecast-button-container"
-      style="position: absolute; bottom: 20px; left: 0; right: 0; width: 100%; display: flex; justify-content: center; align-items: center;">
-      <button class="btn btn-primary forecast-button" style="font-size: 0.9rem; padding: 0.4rem 0.8rem;"
-        @click="forecastWater" :disabled="isForecasting || !uploadedFile">
-        <i class="ti-bar-chart mr-1"></i>
-        {{ isForecasting ? '预测中...' : '预测水量' }}
-      </button>
+    <!-- 底部预测区域 -->
+    <div class="bottom-forecast-section"
+      style="position: absolute; bottom: 30px; left: 0; right: 0; width: 100%; padding: 0 20px;">
+
+      <!-- 预测天数输入 - 第一行 -->
+      <div class="forecast-days-input"
+        style="display: flex; justify-content: center; align-items: center; gap: 10px; margin-bottom: 8px;">
+        <label for="forecastDays" class="form-label" style="margin: 0; white-space: nowrap;">预测天数：</label>
+        <div class="input-group" style="width: 120px;">
+          <input type="number" id="forecastDays" v-model.number="forecastDays" class="form-control" :min="7" :max="100"
+            placeholder="30" style="text-align: center;" />
+          <span class="input-group-text">天</span>
+        </div>
+      </div>
+
+      <!-- 提示文字 - 第二行 -->
+      <div style="text-align: center; margin-bottom: 15px;">
+        <small class="form-text text-muted" style="font-size: 12px; color: #6c757d;">
+          请输入7-100天之间的数值
+        </small>
+      </div>
+
+      <!-- 预测水量按钮 - 第三行 -->
+      <div class="forecast-button-container" style="text-align: center;">
+        <button class="btn btn-primary forecast-button"
+          style="font-size: 0.95rem; padding: 0.5rem 1.2rem; min-width: 140px;" @click="testForecast"
+          :disabled="isForecasting || !uploadedFile || !isValidForecastDays">
+          <i class="ti-bar-chart mr-1"></i>
+          {{ isForecasting ? '预测中...' : `预测水量` }}
+        </button>
+      </div>
     </div>
 
   </div>
@@ -173,10 +195,16 @@ export default {
       predictionResult: null,
       showChartPreview: false,
       loadingChart: false,
-      dataConsumptionChart: null
+      dataConsumptionChart: null,
+      forecastDays: 30, // 默认预测30天
     }
   },
-
+  computed: {
+    // 新增计算属性：验证预测天数是否有效
+    isValidForecastDays() {
+      return this.forecastDays >= 7 && this.forecastDays <= 100 && Number.isInteger(this.forecastDays);
+    }
+  },
   methods: {
     generateChart() {
       if (!this.uploadedFile) {
@@ -424,11 +452,14 @@ export default {
         this.closeNotification();
       }, 5000);
     },
-
     closeNotification() {
       this.showNotification = false;
+      this.notificationMessage = '';
+      this.notificationType = 'success';
+      this.notificationIcon = 'ti-check-circle';
     },
 
+    
     // 查看文件内容
     async viewFileContent() {
       console.log('viewFileContent 方法被调用');
@@ -465,71 +496,24 @@ export default {
         this.loadingFileContent = false;
       }
     },
+    testForecast() {
+      console.log('=== 测试按钮被点击 ===');
 
-    // 查看预测结果
-    async forecastWater() {
+      // 检查所有必要条件
       if (!this.uploadedFile) {
-        this.showErrorNotification('请先上传CSV文件');
+        console.log('缺少上传文件');
+        alert('缺少上传文件');
         return;
       }
 
-      this.isForecasting = true;
-      this.forecastStatus = '正在预测水量，请稍候...';
-      this.forecastStatusType = 'text-info';
-      this.forecastStatusIcon = 'ti-time';
-
-      try {
-        // 发送预测请求
-        const forecastResponse = await axios.post('http://localhost:5000/api/files/water-forecast/predict');
-
-        if (forecastResponse.data.success) {
-          this.forecastStatus = '预测完成！';
-          this.forecastStatusType = 'text-success';
-          this.forecastStatusIcon = 'ti-check-circle';
-          this.showSuccessNotification('水量预测完成！');
-
-          // 设置预测结果，使预测结果区域可见
-          this.predictionResult = {
-            path: 'Water-Forecast-Master/results/predictions/predict_data.csv',
-            date: new Date().toISOString()
-          };
-
-          // 获取预测结果数据并绘制图表
-          try {
-            // 调用后端API获取预测结果文件内容
-            const resultResponse = await axios.get('http://localhost:5000/api/files/prediction-result');
-
-            if (resultResponse.data.success) {
-              // 使用返回的数据
-              this.fileHeaders = resultResponse.data.columns;
-              this.fileRows = resultResponse.data.data;
-              console.log("预测结果列头:", this.fileHeaders);
-              console.log("预测结果第一行数据:", this.fileRows[0]);
-
-              // 绘制预测结果图表
-              this.drawPredictionChartFromData(this.fileHeaders, this.fileRows);
-            } else {
-              this.showErrorNotification('获取预测结果数据失败');
-            }
-          } catch (resultError) {
-            console.error('获取预测结果数据出错:', resultError);
-            this.showErrorNotification(`获取预测结果数据出错: ${resultError.message}`);
-          }
-        } else {
-          this.forecastStatus = `预测失败: ${forecastResponse.data.error}`;
-          this.forecastStatusType = 'text-danger';
-          this.forecastStatusIcon = 'ti-alert-circle';
-          this.showErrorNotification(`预测失败: ${forecastResponse.data.error}`);
-        }
-      } catch (error) {
-        console.error('预测水量出错:', error);
-        this.forecastStatus = `预测出错: ${error.response?.data?.error || error.message}`;
-        this.forecastStatusType = 'text-danger';
-        this.forecastStatusIcon = 'ti-alert-circle';
-        this.showErrorNotification(`预测出错: ${error.response?.data?.error || error.message}`);
-      } finally {
-        this.isForecasting = false;
+      if (!this.isValidForecastDays) {
+        console.log('预测天数无效');
+        alert('预测天数无效');
+        return;
       }
+
+      // 调用真正的预测方法
+      this.forecastWater();
     },
 
     // 从API返回的数据绘制图表
@@ -662,23 +646,27 @@ export default {
       this.forecastStatusIcon = 'ti-time';
 
       try {
-        const response = await axios.post('http://localhost:5000/api/files/water-forecast/predict');
+        // 🎯 修改这里：添加预测天数参数
+        const response = await axios.post('http://localhost:5000/api/files/water-forecast/predict', {
+          forecast_days: this.forecastDays
+        }, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
 
         if (response.data.success) {
           this.forecastStatus = '预测完成！';
           this.forecastStatusType = 'text-success';
           this.forecastStatusIcon = 'ti-check-circle';
-          this.showSuccessNotification('水量预测完成！');
+          this.showSuccessNotification(`水量预测完成！预测了未来${this.forecastDays}天的数据`);
 
           // 设置预测结果，使预测结果区域可见
           this.predictionResult = {
             path: 'Water-Forecast-Master/results/predictions/predict_data.csv',
             date: new Date().toISOString()
           };
-          // 删除或注释掉以下代码，以防止自动打开预测结果
-          // setTimeout(() => {
-          //   this.viewPredictionResult();
-          // }, 500);
+
           const resultResponse = await axios.get('http://localhost:5000/api/files/prediction-result');
 
           if (resultResponse.data.success) {
@@ -687,6 +675,7 @@ export default {
             this.fileRows = resultResponse.data.data;
             console.log("预测结果列头:", this.fileHeaders);
             console.log("预测结果第一行数据:", this.fileRows[0]);
+            console.log("预测天数:", this.forecastDays); // 🎯 添加日志
 
             // 在数据加载完成后绘制图表
             this.$nextTick(() => {
@@ -711,6 +700,7 @@ export default {
         this.isForecasting = false;
       }
     }
+
   }
 };
 </script>
@@ -984,6 +974,7 @@ export default {
   margin-right: auto;
   /* 标题靠左 */
 }
+
 .header-container {
   margin-bottom: 15px;
 }
@@ -1033,5 +1024,86 @@ export default {
 /* 悬停效果 */
 .btn:hover {
   opacity: 0.9;
+}
+
+.forecast-days-container {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border: 1px solid #e9ecef;
+}
+
+.forecast-days-input {
+  text-align: center;
+}
+
+.forecast-days-input .form-label {
+  font-weight: 500;
+  color: #495057;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.input-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 5px;
+}
+
+.input-group .form-control {
+  border-radius: 4px 0 0 4px;
+  border-right: none;
+  text-align: center;
+  font-size: 16px;
+  padding: 8px 12px;
+}
+
+.input-group-text {
+  background-color: #e9ecef;
+  border: 1px solid #ced4da;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  padding: 8px 12px;
+  color: #495057;
+  font-size: 16px;
+}
+
+.form-text {
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+/* 输入框验证状态样式 */
+.form-control:invalid {
+  border-color: #dc3545;
+}
+
+.form-control:valid {
+  border-color: #28a745;
+}
+
+/* 按钮禁用状态样式优化 */
+.forecast-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.bottom-forecast-section {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.forecast-days-container {
+  background: none !important;
+  border: none !important;
+}
+
+.forecast-days-input {
+  background: none !important;
 }
 </style>
