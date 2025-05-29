@@ -161,8 +161,6 @@ def export_network_data(after_simulation=False, hour=0):
                 node_data['base_demand'] = round(float(node.base_demand),10)
                 node_data['demand_unit'] = 'm^3/s'  # 单位为立方米/秒
             
-            node_data['elevation'] = node.elevation
-            
             # 如果是模拟后的数据，添加压力和实际水量信息
             if after_simulation and results is not None:
                 try:
@@ -208,6 +206,9 @@ def export_network_data(after_simulation=False, hour=0):
                     #node_data['current_level'] = round(float(current_level), 10)
                     #print("dsad",node_data['current_level'])
                     # 获取水箱的流入/流出量
+                    pressure = results.node['pressure'].loc[results.node['pressure'].index[time_step_index], node_id]
+                    node_data['pressure'] = round(float(pressure), 10)  # 保留两位小数
+                    node_data['pressure_unit'] = 'm'  # 单位为米
                     demand = results.node['demand'].loc[results.node['demand'].index[time_step_index], node_id]
                     node_data['inflow'] = round(float(demand), 10)  # 水箱流入为负需水量
                     print(demand)
