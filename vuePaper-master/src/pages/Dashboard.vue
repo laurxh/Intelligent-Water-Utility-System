@@ -174,9 +174,10 @@
               <span class="detail-value">{{ selectedElement.head || 0 }} m</span>
             </div>
             <div class="detail-item"
-              v-if="selectedElement.node_type === 'Reservoir' && selectedElement.current_head !== undefined">
-              <span class="detail-label">当前水头:</span>
-              <span class="detail-value">{{ selectedElement.current_head }} m</span>
+              v-if="selectedElement.node_type === 'Reservoir' && selectedElement.pressure !== undefined">
+              <span class="detail-label">压力:</span>
+              <span class="detail-value">{{ selectedElement.pressure }} {{ selectedElement.pressure_unit
+                || 'm' }}</span>
             </div>
             <div class="detail-item"
               v-if="selectedElement.node_type === 'Reservoir' && selectedElement.outflow !== undefined">
@@ -195,6 +196,12 @@
             <div class="detail-item" v-if="selectedElement.node_type === 'Tank'">
               <span class="detail-label">最小水位:</span>
               <span class="detail-value">{{ selectedElement.min_level || 0 }} m</span>
+            </div>
+            <div class="detail-item"
+              v-if="selectedElement.node_type === 'Tank' && selectedElement.pressure !== undefined">
+              <span class="detail-label">压力:</span>
+              <span class="detail-value">{{ selectedElement.pressure }} {{ selectedElement.pressure_unit
+                || 'm' }}</span>
             </div>
             <div class="detail-item"
               v-if="selectedElement.node_type === 'Tank' && selectedElement.inflow !== undefined">
@@ -2063,6 +2070,7 @@ export default {
 .close-btn:hover {
   color: #343a40;
 }
+
 .link {
   cursor: pointer;
 }
@@ -2070,6 +2078,7 @@ export default {
 .link:hover {
   stroke-width: 4px;
 }
+
 /* 方案信息样式 */
 .plan-info {
   background-color: #f8f9fa;
@@ -2098,6 +2107,7 @@ export default {
 .element-popup-footer .btn {
   margin-left: 10px;
 }
+
 .coverage-chart-container {
   height: 400px;
   width: 100%;
@@ -2127,6 +2137,7 @@ export default {
 .table-striped tbody tr:nth-of-type(odd) {
   background-color: rgba(0, 0, 0, 0.05);
 }
+
 .node.selected-sensor {
   filter: drop-shadow(0 0 4px rgba(255, 152, 0, 0.8));
   cursor: pointer;
@@ -2157,6 +2168,7 @@ export default {
   font-size: 0.875rem;
   color: #6c757d;
 }
+
 .visualization-container {
   margin: 20px 0;
   padding: 15px;
@@ -2184,6 +2196,7 @@ export default {
   margin-right: 5px;
   border-radius: 2px;
 }
+
 .plan-visualization-container {
   margin: 15px 0;
   border: 1px solid #e9ecef;
@@ -2199,6 +2212,7 @@ export default {
   border-radius: 4px;
   overflow: hidden;
 }
+
 /* 添加到<style>部分 */
 .plan-visualization-container {
   margin: 20px 0;
@@ -2237,6 +2251,7 @@ export default {
   overflow-y: auto;
   flex: 1;
 }
+
 .visualization-container {
   width: 100%;
   height: 400px;
@@ -2271,6 +2286,7 @@ export default {
   margin-bottom: 10px;
   font-weight: 600;
 }
+
 .visualization-container {
   width: 100%;
   height: 400px;
@@ -2305,6 +2321,7 @@ export default {
   margin-bottom: 10px;
   font-weight: 600;
 }
+
 .visualization-container {
   width: 100%;
   height: 400px;
@@ -2313,6 +2330,7 @@ export default {
   margin-bottom: 15px;
   overflow: hidden;
 }
+
 .plan-info-title {
   margin-bottom: 20px;
   /* 增加下方间距 */
