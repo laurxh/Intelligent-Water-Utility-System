@@ -222,7 +222,7 @@ def export_network_data(after_simulation=False, hour=0):
         if node.node_type == 'Junction':
             # 对于模拟前的数据，添加基本需水量
             if not after_simulation:
-                node_data['base_demand'] = node.base_demand
+                node_data['base_demand'] = round(float(node.base_demand),10)
                 node_data['demand_unit'] = 'm^3/s'  # 单位为立方米/秒
             
             node_data['elevation'] = node.elevation
