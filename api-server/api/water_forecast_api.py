@@ -223,7 +223,34 @@ def get_file_content():
     except Exception as e:
         logger.error(f"获取文件内容出错: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
-
+def filter_prediction_results(forecast_days):
+    """
+    筛选预测结果，只保留前forecast_days+1行的数据（包含表头）
+    """
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prediction_file_path = os.path.join(base_dir, 'Water-Forecast-Master/results/predictions/predict_data.csv')
+        
+        if not os.path.exists(prediction_file_path):
+            print(f"⚠️ 预测结果文件不存在: {prediction_file_path}")
+            return False
+        
+        # 读取CSV文件
+        df = pd.read_csv(prediction_file_path)
+        print(f"原始数据行数: {len(df)}")
+        
+        # 只保留前forecast_days行数据
+        df_filtered = df.head(forecast_days)
+        
+        # 保存回原文件
+        df_filtered.to_csv(prediction_file_path, index=False)
+        
+        print(f"✅ 已保存前{forecast_days}行数据到预测结果文件")
+        return True
+            
+    except Exception as e:
+        print(f"❌ 筛选预测结果时出错: {str(e)}")
+        return False
 @file_upload_routes.route('/water-forecast/predict', methods=['POST'])
 
 def predict_water_forecast():
@@ -233,8 +260,19 @@ def predict_water_forecast():
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         water_forecast_dir = os.path.join(base_dir, 'water-forecast-master')  # 注意这里使用小写
         prediction_file_path = os.path.join(water_forecast_dir, 'results/predictions/predict_data.csv')
+        request_data = request.get_json()
+        forecast_days = request_data.get('forecast_days', 7)  # 默认7天
         
-        logger.info(f"开始运行训练和预测流程")
+        print(f"收到预测请求，预测天数: {forecast_days}")
+        
+        logger.info(f"最终获取的预测天数: {forecast_days}")
+        
+        # 验证预测天数
+        if not isinstance(forecast_days, int) or forecast_days < 1:
+            logger.error(f"无效的预测天数: {forecast_days}")
+            return jsonify({"success": False, "error": "预测天数必须是正整数"}), 400
+        
+        logger.info(f"开始运行训练和预测流程，预测天数: {forecast_days}")
         
         # 检查目录是否存在
         if not os.path.exists(water_forecast_dir):
@@ -315,7 +353,7 @@ def predict_water_forecast():
             return jsonify({"success": False, "error": "预测完成，但结果文件不存在"}), 404
         
         logger.info(f"预测完成，找到预测结果文件: {prediction_file_path}")
-        
+        filter_prediction_results(forecast_days)
         return jsonify({
             "success": True,
             "message": "训练和预测完成",
