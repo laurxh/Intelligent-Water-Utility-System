@@ -6,6 +6,8 @@
       <h4 class="title">数据导入</h4>
 
       <div class="buttons-container">
+        <!-- 合并图表按钮 - 与生成图表按钮样式一致 -->
+
         <button class="btn btn-success btn-sm" @click="generateChart">
           <i class="ti-bar-chart"></i> 生成图表
         </button>
@@ -44,7 +46,6 @@
         <span class="view-text">点击查看</span>
       </div>
     </div>
-
     <!-- 预测结果文件 -->
     <div v-if="predictionResult" class="prediction-result-container">
       <h5 class="mt-4 mb-3">预测结果</h5>
@@ -123,7 +124,24 @@
         </div>
       </div>
     </div>
-
+    <div v-if="showImageModal" class="modal fade show" style="display: block; background-color: rgba(0,0,0,0.5);"
+      @click.self="closeImageModal">
+      <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header border-0 pb-0">
+            <h5 class="modal-title">{{ imageModalTitle }}</h5>
+            <button type="button" class="btn-close" @click="closeImageModal" aria-label="关闭">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body text-center pt-2">
+            <img v-if="currentImageData" :src="currentImageData" class="img-fluid" alt="图表"
+              style="max-width: 100%; max-height: 70vh; object-fit: contain;">
+            <p v-else class="text-muted">暂无图像数据</p>
+          </div>
+        </div>
+      </div>
+    </div>
     <!-- 底部分隔线 -->
     <hr class="mt-5 mb-4">
 
@@ -197,6 +215,11 @@ export default {
       loadingChart: false,
       dataConsumptionChart: null,
       forecastDays: 30, // 默认预测30天
+      after_forecast: false,
+      showImageModal: false,
+      currentImageData: null,
+      imageModalTitle: '',
+      isMergingCharts: false, // 添加合并图表的加载状态
     }
   },
   computed: {
@@ -206,150 +229,106 @@ export default {
     }
   },
   methods: {
-    generateChart() {
+    async mergeCharts() {
+      if (!this.after_forecast) {
+        this.showErrorNotification('请先执行预测');
+        return;
+      }
+
+      // 设置加载状态
+      this.isMergingCharts = true;
+
+      try {
+        const response = await axios.get('http://localhost:5000/api/files/merge');
+
+        console.log('合并图表API响应:', response.data);
+
+        if (response.data.success) {
+          // 显示合并图表的弹窗
+          this.showImageInModal(response.data.image_base64, '合并图表');
+
+          // 可选：显示成功消息
+          if (response.data.message) {
+            this.showSuccessNotification(response.data.message);
+          }
+        } else {
+          this.showErrorNotification(response.data.message || '获取合并图表失败');
+        }
+      } catch (error) {
+        console.error('合并图表请求失败:', error);
+
+        // 更详细的错误处理
+        if (error.response) {
+          // 服务器响应了错误状态码
+          const status = error.response.status;
+          const message = error.response.data?.message || '服务器错误';
+
+          if (status === 404) {
+            this.showErrorNotification('数据文件未找到，请检查文件路径');
+          } else if (status === 400) {
+            this.showErrorNotification(`数据格式错误: ${message}`);
+          } else if (status === 500) {
+            this.showErrorNotification(`服务器内部错误: ${message}`);
+          } else {
+            this.showErrorNotification(`请求失败 (${status}): ${message}`);
+          }
+        } else if (error.request) {
+          // 请求发出但没有收到响应
+          this.showErrorNotification('网络连接失败，请检查服务器是否运行');
+        } else {
+          // 其他错误
+          this.showErrorNotification('请求配置错误: ' + error.message);
+        }
+      } finally {
+        // 无论成功还是失败都要取消加载状态
+        this.isMergingCharts = false;
+      }
+    },
+
+    // 生成图表 - 获取原始数据图像
+    async generateChart() {
       if (!this.uploadedFile) {
         this.showErrorNotification('请先上传CSV文件');
         return;
       }
 
-      this.showChartPreview = true;
-      this.loadingChart = true;
+      try {
+        const response = await axios.get('http://localhost:5000/api/files/get_original_chart');
 
-      // 直接使用已经解析好的数据创建图表
-      if (this.fileRows.length === 0) {
-        this.showErrorNotification('没有可用的数据，请重新上传文件');
-        this.loadingChart = false;
-        this.showChartPreview = false;
-        return;
+        console.log('API响应:', response.data);
+
+        if (response.data.success) {
+          // 显示原始图表的弹窗
+          this.showImageInModal(response.data.image_base64, '原始数据图表');
+        } else {
+          this.showErrorNotification('生成图表失败: ' + response.data.message);
+        }
+      } catch (error) {
+        console.error('生成图表请求失败:', error);
+        this.showErrorNotification('网络请求失败');
       }
-
-      console.log(this.fileRows);
-
-      // 使用 nextTick 确保 DOM 已更新
-      this.$nextTick(() => {
-        // 延迟一点时间确保模态框已完全显示
-        setTimeout(() => {
-          this.createConsumptionChart();
-        }, 300);
-      });
     },
 
+    // 在弹窗中显示图像
+    showImageInModal(imageData, title) {
+      console.log('显示图像数据:', imageData ? '有数据' : '无数据');
 
-    // 创建需水量图表
-    createConsumptionChart() {
-      try {
-        console.log("开始创建图表...");
-
-        // 获取日期和需水量数据
-        const dateField = this.fileHeaders[0]; // 假设第一列是日期
-        const consumptionField = this.fileHeaders[1]; // 假设第二列是需水量
-
-        console.log("使用的日期字段:", dateField);
-        console.log("使用的需水量字段:", consumptionField);
-
-        // 将Vue响应式对象转换为普通JavaScript对象
-        const plainData = JSON.parse(JSON.stringify(this.fileRows));
-        console.log("转换后的数据示例:", plainData[0]);
-
-        // 过滤掉日期为空的数据
-        const filteredData = plainData.filter(row => {
-          return row[dateField] && row[dateField].trim() !== "";
-        });
-
-        console.log("过滤前数据条数:", plainData.length);
-        console.log("过滤后数据条数:", filteredData.length);
-
-        // 准备图表数据
-        const dates = filteredData.map(row => row[dateField]);
-        const consumption = filteredData.map(row => parseFloat(row[consumptionField]) || 0);
-
-        // 获取canvas元素
-        const canvas = this.$refs.dataConsumptionChart;
-        if (!canvas) {
-          console.error("找不到canvas元素");
-          this.showErrorNotification("找不到图表容器");
-          this.loadingChart = false;
-          return;
-        }
-
-        // 获取2D上下文
-        const ctx = canvas.getContext('2d');
-
-        // 销毁旧图表
-        if (this.dataConsumptionChart) {
-          this.dataConsumptionChart.destroy();
-        }
-
-        // 创建新图表
-        this.dataConsumptionChart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: dates,
-            datasets: [{
-              label: '需水量',
-              data: consumption,
-              borderColor: 'rgb(20, 180, 170)',
-              backgroundColor: 'rgba(20, 180, 170, 0.2)',
-              borderWidth: 2.5,
-              fill: true,
-
-              // 关键参数：增加曲线平滑度
-              tension: 0.4,  // 值范围0-1，越大曲线越平滑
-
-              // 减小或隐藏数据点
-              pointRadius: 0,  // 设为0完全隐藏数据点
-              pointHoverRadius: 4,  // 鼠标悬停时显示点
-
-              // 可选：使线条看起来更平滑
-              borderJoinStyle: 'round',
-
-              // 可选：如果想要更平滑的填充区域
-              segment: {
-                borderColor: ctx => 'rgb(20, 180, 170)'
-              }
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-
-            // 添加标题配置，使"需水量"居中显示
-            plugins: {
-              title: {
-                display: true,
-                align: 'center',
-                position: 'top',
-                font: {
-                  size: 16,
-                  weight: 'bold'
-                },
-                padding: {
-                  top: 10,
-                  bottom: 10
-                }
-              },
-              // 如果您想保留图例但让其居中
-              legend: {
-                display: true,
-                position: 'top',
-                align: 'center'
-              }
-            },
-
-            elements: {
-              line: {
-                tension: 0.4  // 全局设置线条平滑度
-              }
-            }
-          }
-        });
-
-        this.loadingChart = false;
-      } catch (error) {
-        console.error("创建图表时出错:", error);
-        this.showErrorNotification("创建图表时出错: " + error.message);
-        this.loadingChart = false;
+      if (imageData && imageData.startsWith('data:image')) {
+        this.currentImageData = imageData;
+        this.imageModalTitle = title;
+        this.showImageModal = true;
+        console.log('图像弹窗已打开');
+      } else {
+        console.log('图像数据格式不正确:', imageData);
+        this.showErrorNotification('图像数据格式错误');
       }
+    },
+
+    // 关闭图像弹窗
+    closeImageModal() {
+      this.showImageModal = false;
+      this.currentImageData = null;
+      this.imageModalTitle = '';
     },
     // 关闭图表预览
     closeChartPreview() {
@@ -459,7 +438,7 @@ export default {
       this.notificationIcon = 'ti-check-circle';
     },
 
-    
+
     // 查看文件内容
     async viewFileContent() {
       console.log('viewFileContent 方法被调用');
@@ -681,6 +660,7 @@ export default {
             this.$nextTick(() => {
               this.drawPredictionChart();
             });
+            this.after_forecast = true
           } else {
             this.showErrorNotification('获取预测结果数据失败');
           }
@@ -1105,5 +1085,43 @@ export default {
 
 .forecast-days-input {
   background: none !important;
+}
+.modal {
+  z-index: 1050;
+}
+
+.modal-xl {
+  max-width: 90%;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #000;
+  opacity: 0.5;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-close:hover {
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1rem 0 1rem;
+}
+
+.modal-body {
+  padding: 0.5rem 1rem 1rem 1rem;
 }
 </style>

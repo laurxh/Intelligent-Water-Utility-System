@@ -7,6 +7,14 @@ import shutil
 import logging
 from flask import send_file
 import subprocess
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib
+import io
+import base64
+from flask import jsonify
+matplotlib.use('Agg')
 # 设置日志
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -445,3 +453,208 @@ def download_prediction_file():
     except Exception as e:
         logger.error(f"下载预测结果文件出错: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
+    
+@file_upload_routes.route('/merge', methods=['GET'])
+def get_merge_chart():
+    try:
+        # 获取当前文件所在目录（api-server/api/）
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 获取api-server目录（上一级目录）
+        api_server_dir = os.path.dirname(current_dir)
+        
+        # 构建文件路径
+        original_data_path = os.path.join(api_server_dir, "water-forecast-master", "data", "preprocessed", "all", "preprocessed_data.csv")
+        prediction_data_path = os.path.join(api_server_dir, "water-forecast-master", "results", "predictions", "predict_data.csv")
+        
+        # 打印路径用于调试
+        print(f"当前文件目录: {current_dir}")
+        print(f"API服务器目录: {api_server_dir}")
+        print(f"原始数据路径: {original_data_path}")
+        print(f"预测数据路径: {prediction_data_path}")
+        
+        # 检查文件是否存在
+        if not os.path.exists(original_data_path):
+            return jsonify({
+                'success': False,
+                'message': f'原始数据文件不存在: {original_data_path}'
+            }), 404
+            
+        if not os.path.exists(prediction_data_path):
+            return jsonify({
+                'success': False,
+                'message': f'预测数据文件不存在: {prediction_data_path}'
+            }), 404
+        
+        # 读取数据
+        original_df = pd.read_csv(original_data_path)
+        prediction_df = pd.read_csv(prediction_data_path)
+        
+        print(f"原始数据形状: {original_df.shape}")
+        print(f"预测数据形状: {prediction_df.shape}")
+        print(f"原始数据列名: {original_df.columns.tolist()}")
+        print(f"预测数据列名: {prediction_df.columns.tolist()}")
+        
+        # 设置中文字体
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        # 创建图表
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # 自动检测数值列
+        original_numeric_cols = original_df.select_dtypes(include=['float64', 'int64']).columns
+        prediction_numeric_cols = prediction_df.select_dtypes(include=['float64', 'int64']).columns
+        
+        if len(original_numeric_cols) == 0:
+            return jsonify({
+                'success': False,
+                'message': f'原始数据文件中没有找到数值列。可用列: {original_df.columns.tolist()}'
+            }), 400
+            
+        if len(prediction_numeric_cols) == 0:
+            return jsonify({
+                'success': False,
+                'message': f'预测数据文件中没有找到数值列。可用列: {prediction_df.columns.tolist()}'
+            }), 400
+        
+        # 使用第一个数值列作为y轴数据
+        original_y = original_df[original_numeric_cols[0]]
+        prediction_y = prediction_df[prediction_numeric_cols[0]]
+        
+        # 创建x轴数据
+        original_x = range(len(original_df))
+        prediction_x = range(len(original_df), len(original_df) + len(prediction_df))
+        
+        # 绘制原始数据（蓝色）
+        ax.plot(original_x, original_y, 
+               color='#1f77b4', linewidth=2.5, label='原始数据', alpha=0.8)
+        
+        # 绘制预测数据（红色）
+        ax.plot(prediction_x, prediction_y, 
+               color='#d62728', linewidth=2.5, label='预测数据', alpha=0.8)
+        
+        # 在连接点添加标记
+        if len(original_df) > 0 and len(prediction_df) > 0:
+            ax.axvline(x=len(original_df)-1, color='gray', linestyle='--', alpha=0.5, label='预测起始点')
+        
+        # 设置图表样式
+        ax.set_title('水位数据与预测对比图', fontsize=16, fontweight='bold', pad=20)
+        ax.set_xlabel('时间点', fontsize=12)
+        ax.set_ylabel(f'{original_numeric_cols[0]}', fontsize=12)
+        ax.legend(fontsize=12, loc='best')
+        ax.grid(True, alpha=0.3)
+        
+        # 设置背景色
+        ax.set_facecolor('#f8f9fa')
+        
+        # 调整布局
+        plt.tight_layout()
+        
+        # 将图表转换为base64字符串
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        plt.close()  # 关闭图表释放内存
+        
+        return jsonify({
+            'success': True,
+            'image_base64': f'data:image/png;base64,{image_base64}',
+            'message': '合并图表生成成功'
+        })
+        
+    except FileNotFoundError as e:
+        print(f"文件未找到错误: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'文件未找到: {str(e)}'
+        }), 404
+    except pd.errors.EmptyDataError as e:
+        print(f"数据为空错误: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'CSV文件为空或格式错误'
+        }), 400
+    except Exception as e:
+        print(f"生成合并图表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()  # 打印完整的错误堆栈
+        return jsonify({
+            'success': False,
+            'message': f'生成图表时发生错误: {str(e)}'
+        }), 500
+import matplotlib.pyplot as plt
+import io
+import base64
+
+@file_upload_routes.route('/get_original_chart', methods=['GET'])
+def get_original_chart():
+    try:
+        print("开始执行 get_original_chart")
+        
+        # 获取当前工作目录
+        current_dir = os.getcwd()
+        print(f"当前工作目录: {current_dir}")
+        
+        # 尝试不同的路径
+        possible_paths = [
+            "api-server/water-forecast-master/data/preprocessed/all/preprocessed_data.csv",
+            "water-forecast-master/data/preprocessed/all/preprocessed_data.csv",
+            "data/preprocessed/all/preprocessed_data.csv",
+            "../water-forecast-master/data/preprocessed/all/preprocessed_data.csv",
+            "./api-server/water-forecast-master/data/preprocessed/all/preprocessed_data.csv"
+        ]
+        
+        csv_path = None
+        for path in possible_paths:
+            print(f"检查路径: {path}")
+            if os.path.exists(path):
+                csv_path = path
+                print(f"找到文件: {path}")
+                break
+        
+        if csv_path is None:
+            # 列出当前目录结构帮助调试
+            print("当前目录内容:")
+            for item in os.listdir('.'):
+                print(f"  {item}")
+            
+            return jsonify({
+                'success': False,
+                'message': '找不到CSV文件，请检查文件路径'
+            }), 500
+        
+        # 读取CSV数据
+        df = pd.read_csv(csv_path)
+        print(f"CSV读取成功，数据形状: {df.shape}")
+        
+        # 获取需水量数据
+        consumption = df.iloc[:, 1]  # 第二列：需水量
+        
+        # 创建图表
+        plt.figure(figsize=(12, 6))
+        plt.plot(consumption, color='blue', linewidth=1)
+        plt.title('用水需求量')
+        plt.xlabel('时间')
+        plt.ylabel('需水量')
+        plt.grid(True, alpha=0.3)
+        
+        # 转换为base64
+        img_buffer = io.BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+        plt.close()
+        return jsonify({
+            'success': True,
+            'image_base64': f'data:image/png;base64,{img_base64}'
+        })
+        
+    except Exception as e:
+        print(f"错误详情: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
